@@ -12,5 +12,6 @@ SERVICE = "veloscroll"
 UNIT_PATH = "/etc/systemd/system/veloscroll.service"
 
 GUI_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # /opt/veloscroll-gui
+ICON_PATH = os.path.join(GUI_DIR, "velogui", "icon.png")
 PRIV_PATH = os.path.join(GUI_DIR, "helpers", "priv.py")
 SUDOERS_FILE = "/etc/sudoers.d/veloscroll-gui"

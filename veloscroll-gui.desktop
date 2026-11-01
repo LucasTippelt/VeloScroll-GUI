@@ -3,5 +3,6 @@ Type=Application
 Name=VeloScroll GUI
 Comment=Configure and monitor the VeloScroll daemon
 Exec=/opt/veloscroll-gui/run.sh
+Icon=/opt/veloscroll-gui/velogui/icon.png
 Terminal=false
 Categories=Utility;Qt;

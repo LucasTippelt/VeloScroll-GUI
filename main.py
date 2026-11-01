@@ -16,9 +16,10 @@ import time
 os.environ.setdefault("QT_API", "pyside")
 
 from PySide6.QtCore import QTimer                # noqa: E402
+from PySide6.QtGui import QIcon                   # noqa: E402
 from PySide6.QtWidgets import (QApplication, QMainWindow, QTabWidget, QVBoxLayout, QWidget)  # noqa: E402
 
-from velogui import APP_NAME                     # noqa: E402
+from velogui import APP_NAME, ICON_PATH          # noqa: E402
 from velogui.backups_tab import BackupsTab       # noqa: E402
 from velogui.config_tab import ConfigTab         # noqa: E402
 from velogui.device_tab import DeviceTab         # noqa: E402
@@ -152,6 +153,7 @@ class MainWindow(QMainWindow):
 
 def main():
     app = QApplication(sys.argv)
+    app.setWindowIcon(QIcon(ICON_PATH))   # covers the main window and any dialogs it spawns
     win = MainWindow()
     win.show()
     win.start()
