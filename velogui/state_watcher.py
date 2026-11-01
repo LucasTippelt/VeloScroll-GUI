@@ -1,4 +1,4 @@
-"""State-file watcher (250 ms, mtime+size compare), distance-file watcher (~33 Hz) and service poller (2 s).
+"""State-file watcher (250 ms, mtime+size compare), distance-file watcher (polls at the daemon's ticker rate) and service poller (2 s).
 
 A malformed read keeps the last good payload and raises a rate-limited warning —
 it never crashes the GUI. Flag-off suspicion: the service is observed active AND
@@ -7,9 +7,11 @@ first becomes active, so the signal fires ~5 s after startup in that situation.
 
 The distance file (daemon key DISTANCE_FILE) is rewritten by the daemon on every
 ticker tick while a scroll session is held — to keep the live curve markers smooth
-it is polled at ~33 Hz instead of the state file's 4 Hz. It is optional: with the
-key off the file simply never appears and no distance signal ever fires. Malformed
-reads are retried silently on the next tick (atomic replace makes them near-impossible,
+it is polled at that same ticker rate: TICK from the state payload sets the poll
+interval (~250 Hz with the default 0.004 s; DISTANCE_FALLBACK_INTERVAL_MS until
+TICK is known) instead of the state file's 4 Hz. It is optional: with the key off
+the file simply never appears and no distance signal ever fires. Malformed reads
+are retried silently on the next tick (atomic replace makes them near-impossible,
 and a rate-limited status-bar flash at this poll rate would just be noise).
 """
 import json
@@ -30,7 +32,7 @@ class StateWatcher(QObject):
     flag_off_suspected = Signal()       # service active, no state file for >5 s continuously
 
     STATE_INTERVAL_MS = 250
-    DISTANCE_INTERVAL_MS = 30           # ~33 Hz: the daemon rewrites the file every tick (~4 ms) while held; this is how fast the markers can follow
+    DISTANCE_FALLBACK_INTERVAL_MS = 30  # used until the daemon's TICK is known from the state file, then the poll rate follows the ticker (the file's rewrite rate)
     SERVICE_INTERVAL_MS = 2000
     FLAG_OFF_DELAY_S = 5.0
     WARNING_COOLDOWN_S = 10.0
@@ -53,7 +55,7 @@ class StateWatcher(QObject):
         self._t_state.setInterval(self.STATE_INTERVAL_MS)
         self._t_state.timeout.connect(self._tick_state)
         self._t_distance = QTimer(self)
-        self._t_distance.setInterval(self.DISTANCE_INTERVAL_MS)
+        self._t_distance.setInterval(self.DISTANCE_FALLBACK_INTERVAL_MS)
         self._t_distance.timeout.connect(self._tick_distance)
         self._t_service = QTimer(self)
         self._t_service.setInterval(self.SERVICE_INTERVAL_MS)
@@ -104,7 +106,23 @@ class StateWatcher(QObject):
         self.payload = data
         self.last_read_ts = time.time()
         self.state_mtime_ns = st.st_mtime_ns
+        self._sync_distance_interval(data)
         self.state_changed.emit(data)
+
+    def _sync_distance_interval(self, payload):
+        """Match the distance poll rate to the daemon's ticker period: the file is rewritten on every
+        tick while held, so polling faster can't help and slower just lags the markers. TICK comes from
+        the state payload's effective values; a missing or malformed value keeps the current interval."""
+        vals = payload.get("values") if isinstance(payload, dict) else None
+        tick = vals.get("TICK") if isinstance(vals, dict) else None
+        if isinstance(tick, bool) or not isinstance(tick, (int, float)):
+            return
+        try:
+            ms = max(1, int(round(float(tick) * 1000)))
+        except (OverflowError, ValueError):
+            return
+        if ms != self._t_distance.interval():
+            self._t_distance.setInterval(ms)
 
     def _tick_distance(self):
         """Poll the high-rate distance file; emit on every rewrite (mtime+size compare, like the state tick)."""

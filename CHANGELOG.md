@@ -1,8 +1,17 @@
 # Planned Features/Ideas
 
-- Move Scroll mode and Feel on Status_config to new Scroll/Invert tab
-- Give user GUI key for which tab should be opened on startup (in Status_Config)
 - A way for the graphs to signal if scrolling is up/down or left/right (Change the arrow between Inches and Notches based on the context)
+- Ghost cursor?
+
+# v1.3.1
+
+**GUI-only changes, parity with Daemon v1.3.0** 
+- **Scroll/Invert tab** — the Feel (`INVERT`, `INVERT_H`, `TICK`) and Scroll mode sections moved out of
+  Status & Config into their own tab, with its own Apply/Cancel bar over the shared edit buffer.
+- **Startup tab key** — new GUI-only config key `STARTUP_TAB` (combo on the Status & Config page) picks
+  which tab opens on startup; an unset or unknown value falls back to the first tab. The daemon ignores
+  the key, so it never affects reloads or presets.
+- The distance watcher (GUI side) now follows the daemon's actual write rate instead of a fixed ~33 Hz.
 
 # v1.3.0 — Initial Release
 

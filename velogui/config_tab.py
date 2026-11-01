@@ -5,12 +5,14 @@ Description (static hint, effective-fallback note when unset, or the validation 
 The Daemon group (service state / grabbed devices / reload health) and the Permissions
 panel sit on the same page above and below the table.
 
-This tab owns the edit buffer for ALL 30 keys and creates one _FieldRow per key; other tabs
-place their share of rows elsewhere instead of in this table — the ramp options (RAMP_KEYS)
-on the Ramp tab next to their live curves, the device & button fields (DEVICE_KEYS) on the
-Device Picker tab next to the mouse selector — and every tab carries its own Apply/Cancel bar
-(apply_bar.py) registered here: all bars drive the same buffer, so a change made on any tab is
-applied/discarded from any.
+This tab owns the edit buffer for ALL keys (the 30 daemon keys plus the GUI-owned STARTUP_TAB)
+and creates one _FieldRow per key; other tabs place their share of rows elsewhere instead of in
+this table — the feel & scroll-mode fields (SCROLL_INVERT_KEYS) on the Scroll/Invert tab, the ramp
+options (RAMP_KEYS) on the Ramp tab next to their live curves, the device & button fields
+(DEVICE_KEYS) on the Device Picker tab next to the mouse selector — and every tab carries its own
+Apply/Cancel bar (apply_bar.py) registered here: all bars drive the same buffer, so a change made
+on any tab is applied/discarded from any. STARTUP_TAB (which tab opens on startup) has its combo
+row in this page's table; the daemon ignores the key itself.
 
 - Typed widgets per key kind (checkboxes, spin boxes, text fields accepting the
   daemon's own syntax: evdev name or decimal for buttons, pair/path/none for DEVICE_MATCH).
@@ -36,11 +38,11 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDoubleSpinBo
                                 QHBoxLayout, QLabel, QLineEdit, QPushButton, QSpinBox, QTableWidget,
                                 QTableWidgetItem, QVBoxLayout, QWidget)
 
-from . import CONFIG_PATH
+from . import CONFIG_PATH, TABS
 from . import values as vmod
 from .apply_bar import ApplyBar
 from .capture import CaptureDialog
-from .config_model import FALLBACK, KEY_KINDS, NULLABLE, RAMP_KEYS, _render, ConfigModel
+from .config_model import FALLBACK, GUI_KEYS, KEY_KINDS, NULLABLE, RAMP_KEYS, _render, ConfigModel
 from .errors import popup_error
 from .permissions_panel import PermissionsPanel, SUDOERS_FIX
 from .proc import PrivError, PrivJob, run_priv
@@ -79,13 +81,13 @@ TITLES = {
     "MAX_BACKUPS": ("MAX_BACKUPS", "-1 unlimited · 0 disabled · N keep newest N"),
     "STATE_FILE": ("STATE_FILE", "write /run/veloscroll/state for GUIs (GUI switch)"),
     "DISTANCE_FILE": ("DISTANCE_FILE", "write /run/veloscroll/distance live feed for the curve markers (GUI switch)"),
+    "STARTUP_TAB": ("STARTUP_TAB", "tab opened on startup — GUI only, the daemon ignores this key"),
 }
 
-SECTIONS = (   # display order per plan, minus RAMP_KEYS (Ramp tab), DEVICE_KEYS (Device Picker tab) and the GUI-owned
-              # lifecycle keys STATE_FILE / DISTANCE_FILE (no selector rows — forced on while open, off at exit):
-              # feel / scroll mode / logging / misc
-    ("Feel", ("INVERT", "INVERT_H", "TICK")),
-    ("Scroll mode", ("TOGGLE_SCROLL", "TOGGLE_SCROLL_H", "VERTICAL_H", "LEFT_CLICK_RESET")),
+SECTIONS = (   # display order per plan, minus SCROLL_INVERT_KEYS (Scroll/Invert tab), RAMP_KEYS (Ramp tab),
+              # DEVICE_KEYS (Device Picker tab) and the GUI-owned lifecycle keys STATE_FILE / DISTANCE_FILE
+              # (no selector rows — forced on while open, off at exit): gui / logging / misc
+    ("GUI", ("STARTUP_TAB",)),
     ("Logging", ("LOG_LEVEL", "LATENCY_LOG")),
     ("Misc", ("MAX_BACKUPS",)),
 )
@@ -146,6 +148,10 @@ class _FieldRow(QWidget):
             self.editor = QComboBox()
             self.editor.addItems(["(unset — falls back to vertical)", "False", "True"])
             self.editor.currentIndexChanged.connect(lambda _i: self.changed.emit())
+        elif kind == "tab":                                        # STARTUP_TAB: one item per tab, in display order
+            self.editor = QComboBox()
+            self.editor.addItems(TABS)
+            self.editor.currentIndexChanged.connect(lambda _i: self.changed.emit())
         elif kind == "int":
             self.editor = QSpinBox()
             if key == "LOG_LEVEL":
@@ -202,8 +208,10 @@ class _FieldRow(QWidget):
         e = self.editor
         if isinstance(e, QCheckBox):
             return "True" if e.isChecked() else "False"
-        if isinstance(e, QComboBox):                    # TOGGLE_SCROLL_H: index 0 = unset
-            return "" if e.currentIndex() == 0 else e.itemText(e.currentIndex())
+        if isinstance(e, QComboBox):
+            if self.key in GUI_KEYS:                     # STARTUP_TAB: every item is a real value (a tab label)
+                return e.itemText(e.currentIndex())
+            return "" if e.currentIndex() == 0 else e.itemText(e.currentIndex())   # tri: index 0 = unset
         if isinstance(e, (QSpinBox, QDoubleSpinBox)):
             v = e.value()
             if self.key in NFLOAT_GEOM and v == 0.0:    # spin-box floor = unset ("none" at write time)
@@ -216,7 +224,11 @@ class _FieldRow(QWidget):
         if isinstance(e, QCheckBox):
             e.blockSignals(True); e.setChecked(bool(value)); e.blockSignals(False)
         elif isinstance(e, QComboBox):
-            idx = 0 if value is None else (2 if value is True else 1)
+            if self.key in GUI_KEYS:                     # STARTUP_TAB: pick the stored label; absent/unknown -> first tab (the default)
+                i = e.findText(str(value)) if value is not None else -1
+                idx = i if i >= 0 else 0
+            else:                                        # tri: index 0 = unset
+                idx = 0 if value is None else (2 if value is True else 1)
             e.blockSignals(True); e.setCurrentIndex(idx); e.blockSignals(False)
         elif isinstance(e, (QSpinBox, QDoubleSpinBox)):
             e.blockSignals(True)
@@ -302,8 +314,9 @@ class ConfigTab(QWidget):
         self.lbl_dataset.setTextInteractionFlags(Qt.TextSelectableByMouse)
         root.addWidget(self.lbl_dataset)
 
-        # one row object per key — the Ramp tab takes its share (RAMP_KEYS) and the Device Picker tab
-        # its DEVICE_KEYS out of this table at construction time; only SECTIONS' keys stay here
+        # one row object per key — the Scroll/Invert tab takes its share (SCROLL_INVERT_KEYS), the Ramp
+        # tab its RAMP_KEYS and the Device Picker tab its DEVICE_KEYS out of this table at construction
+        # time; only SECTIONS' keys stay here
         self._capture_dialogs = {}          # key -> open CaptureDialog (chunk 4), one per button key
         for key in vmod.ALL_KEYS:
             row = _FieldRow(key, KEY_KINDS[key])
@@ -313,8 +326,9 @@ class ConfigTab(QWidget):
                     lambda _pressed=False, k=key: self._open_capture(k))
             self.rows[key] = row
 
-        # only the non-ramp / non-device sections remain on this page; the Ramp and Device Picker tabs
-        # build their own tables with make_section_table (the same layout) for their shares of the rows
+        # only the non-scroll / non-ramp / non-device sections remain on this page; the Scroll/Invert,
+        # Ramp and Device Picker tabs build their own tables with make_section_table (the same layout)
+        # for their shares of the rows
         self.table, _bands = self.make_section_table(SECTIONS)
         root.addWidget(self.table, 1)
 

@@ -18,8 +18,8 @@ it with the exact rate there ("1.23 in → 87 notches/s"), like the deadzone / f
 the mouse scrubs (pan/zoom is disabled) so you can drag it along the curve. While a scroll session
 is held, that same marker takes over: it tracks the daemon's live position from the separate
 distance file /run/veloscroll/distance (only written when the daemon runs with DISTANCE_FILE = True;
-hidden otherwise), which the watcher polls at ~33 Hz — the daemon rewrites it on every ticker tick
-while held, so the marker moves smoothly. The line is clamped to the visible x-range: the daemon's
+hidden otherwise), which the watcher polls at the daemon's ticker rate (TICK) — the daemon rewrites
+it on every tick while held, so the marker moves smoothly. The line is clamped to the visible x-range: the daemon's
 distance keeps growing past FULL_IN while you keep scrolling, so an unclamped marker would fly off
 the right edge of the plot (the label still shows the true distance). Mouse scrubbing is suspended
 for the duration of the hold; on release the marker returns to where it last was placed by hand
@@ -185,7 +185,7 @@ class _AxisPlot(pg.PlotWidget):
 
     def clear_live(self):
         """Session ended: hand the marker back to click/drag — restore the last hand-placed position,
-        or hide it if there was none. Idempotent (distance documents keep arriving at ~33 Hz)."""
+        or hide it if there was none. Idempotent (distance documents keep arriving at the ticker rate)."""
         if not self._live_active:
             return
         self._live_active = False

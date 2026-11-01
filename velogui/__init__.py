@@ -15,3 +15,7 @@ GUI_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # /opt/v
 ICON_PATH = os.path.join(GUI_DIR, "velogui", "icon.png")
 PRIV_PATH = os.path.join(GUI_DIR, "helpers", "priv.py")
 SUDOERS_FILE = "/etc/sudoers.d/veloscroll-gui"
+
+# the tab pages in display order — main.py adds them to the QTabWidget in this order and STARTUP_TAB
+# (a GUI-only config key) stores one of these exact labels for the tab opened on startup
+TABS = ("Status & Config", "Scroll/Invert", "Ramp", "Device Picker", "Presets", "Backups")

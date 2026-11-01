@@ -28,7 +28,12 @@ SECTIONS = (
     ("misc", ("MAX_BACKUPS", "STATE_FILE", "DISTANCE_FILE")),
 )
 
-ALL_KEYS = tuple(k for _, keys in SECTIONS for k in keys)
+# GUI-owned keys: the GUI persists them in [veloscroll] of config.ini, but they are not daemon keys —
+# the daemon logs an unknown-key warning and ignores them (priv.py's apply-config does too). Their
+# effective value is whatever config.ini says; no state-file/computed dataset ever carries them.
+GUI_KEYS = ("STARTUP_TAB",)
+
+ALL_KEYS = tuple(k for _, keys in SECTIONS for k in keys) + GUI_KEYS
 
 DS_STATE = "state file"
 DS_COMPUTED = "computed (in-process)"
@@ -75,6 +80,23 @@ def config_file_keys():
     if not cp.has_section("veloscroll"):
         return set()
     return {k for k, raw in cp["veloscroll"].items() if raw.strip()}
+
+
+def gui_key_values():
+    """{key: raw} for the GUI-owned keys in [veloscroll] of CONFIG_PATH; None when unreadable/malformed.
+
+    The daemon never resolves these (unknown to it), so their effective value is read straight from
+    the file instead of going through resolve()."""
+    try:
+        cp = configparser.ConfigParser(interpolation=None)
+        cp.optionxform = str          # keys are exact Python names
+        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+            cp.read_string(f.read())
+    except (OSError, configparser.Error):
+        return None
+    if not cp.has_section("veloscroll"):
+        return {}
+    return {k: v.strip() for k, v in cp["veloscroll"].items() if k in GUI_KEYS}
 
 
 def resolve(state):
@@ -143,4 +165,13 @@ def build_rows(state):
                 value_text = format_value(key, v)
                 source_text = f"{origin} · {dataset}"
             rows.append({"key": key, "value_text": value_text, "source_text": source_text})
+
+    # GUI-owned keys resolve from the file itself — an absent key means the built-in default applies
+    gui_raws = gui_key_values()
+    for key in GUI_KEYS:
+        if gui_raws is None:
+            rows.append({"key": key, "value_text": "—", "source_text": DS_UNAVAILABLE})
+        else:
+            raw = gui_raws.get(key, "")
+            rows.append({"key": key, "value_text": raw or "(default)", "source_text": "config.ini · gui"})
     return rows, dataset, errors

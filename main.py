@@ -3,10 +3,11 @@
 chunk 3: curve previews + device picker).
 
 Status and Config are merged into one page: a per-key table with the live effective
-value, an edit field, and the description, plus the daemon/permissions groups. The Ramp tab
-holds the ramp options next to their live curves; the Device Picker tab holds the mouse
-selector. Every tab carries its own Apply/Cancel bar over the shared edit buffer; Presets+Backups
-[chunk 5] joins them.
+value, an edit field, and the description, plus the daemon/permissions groups. The Scroll/Invert
+tab holds the feel & scroll-mode fields; the Ramp tab holds the ramp options next to their live
+curves; the Device Picker tab holds the mouse selector. STARTUP_TAB (a GUI-only key edited on the
+Status & Config page) picks which of these tabs opens on startup. Every tab carries its own
+Apply/Cancel bar over the shared edit buffer; Presets+Backups [chunk 5] joins them.
 """
 import os
 import sys
@@ -19,7 +20,7 @@ from PySide6.QtCore import QTimer                # noqa: E402
 from PySide6.QtGui import QIcon                   # noqa: E402
 from PySide6.QtWidgets import (QApplication, QMainWindow, QTabWidget, QVBoxLayout, QWidget)  # noqa: E402
 
-from velogui import APP_NAME, ICON_PATH          # noqa: E402
+from velogui import APP_NAME, ICON_PATH, TABS    # noqa: E402
 from velogui.backups_tab import BackupsTab       # noqa: E402
 from velogui.config_tab import ConfigTab         # noqa: E402
 from velogui.device_tab import DeviceTab         # noqa: E402
@@ -27,6 +28,7 @@ from velogui.errors import Banner                # noqa: E402
 from velogui.permissions_panel import PermissionsPanel  # noqa: E402
 from velogui.presets_tab import PresetsTab       # noqa: E402
 from velogui.ramp_tab import RampTab             # noqa: E402
+from velogui.scroll_tab import ScrollTab         # noqa: E402
 from velogui.state_watcher import StateWatcher   # noqa: E402
 
 FLASH_MS = 5000        # how long a success note stays in the status bar before the base text returns
@@ -45,18 +47,18 @@ class MainWindow(QMainWindow):
         lay.setContentsMargins(6, 6, 6, 6)
         lay.addWidget(self.banner)
 
-        # merged Status+Config page + Ramp (options + curves) + Device Picker + Presets/Backups (chunk 5)
+        # merged Status+Config page + Scroll/Invert (feel & scroll mode) + Ramp (options + curves)
+        # + Device Picker + Presets/Backups (chunk 5); added in TABS order — the same labels STARTUP_TAB stores
         self.tab_config = ConfigTab(self.watcher)
+        self.tab_scroll = ScrollTab(self.tab_config)
         self.tab_ramp = RampTab(self.tab_config, self.watcher)
         self.tab_device = DeviceTab(self.watcher, self.tab_config)
         self.tab_presets = PresetsTab()
         self.tab_backups = BackupsTab(self.watcher)
         self.tabs = QTabWidget()
-        self.tabs.addTab(self.tab_config, "Status & Config")
-        self.tabs.addTab(self.tab_ramp, "Ramp")
-        self.tabs.addTab(self.tab_device, "Device Picker")
-        self.tabs.addTab(self.tab_presets, "Presets")
-        self.tabs.addTab(self.tab_backups, "Backups")
+        for page, name in zip((self.tab_config, self.tab_scroll, self.tab_ramp, self.tab_device,
+                               self.tab_presets, self.tab_backups), TABS):
+            self.tabs.addTab(page, name)
         lay.addWidget(self.tabs, 1)
         self.setCentralWidget(central)
         self.tab_config.dirty_changed.connect(self._on_dirty)
@@ -102,8 +104,16 @@ class MainWindow(QMainWindow):
         # one combined Apply when they differ; DISTANCE_FILE only unless opted out on the Ramp tab), off again
         # at exit (ConfigTab._on_app_quit)
         self.tab_config.auto_set_startup_keys(distance_on=self.tab_ramp.distance_markers_enabled())
+        self._open_startup_tab()
         self.refresh()
         self._refresh_timer.start()
+
+    def _open_startup_tab(self):
+        """STARTUP_TAB (GUI-only key, edited on the Status & Config page) picks the tab opened on
+        startup; an unset or unknown value falls back to the first one."""
+        name = self.tab_config.model.raws.get("STARTUP_TAB", "")
+        idx = TABS.index(name) if name in TABS else 0
+        self.tabs.setCurrentIndex(idx)
 
     def refresh(self):
         self.tab_config.refresh()

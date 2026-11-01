@@ -1,6 +1,6 @@
 """Per-tab Apply/Cancel bar over the shared edit buffer.
 
-Every tab page (Status & Config / Ramp / Device Picker) carries its own bar so a change can be
+Every tab page (Status & Config / Scroll/Invert / Ramp / Device Picker) carries its own bar so a change can be
 committed or discarded without switching pages. All bars are registered with the ConfigTab, which
 owns the buffer and drives every bar's error text, dirty mark, and busy state from one place."""
 from PySide6.QtCore import Qt

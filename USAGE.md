@@ -13,12 +13,17 @@ table, this page's Apply/Cancel bar, and the [Permissions panel](#permissions-pa
   grabbed, and config reload health (`reload OK` / `reload rejected: …` / `pending reload (~2 s)` when
   `config.ini` is newer than the last state-file update).
 - **Values table** — one row per key with four columns: Key | Effective value (live from the state file;
-  a red `—` means the daemon source could not be loaded) | Edit (typed widget) | Description. The ramp
-  keys are edited on the [Ramp tab](#ramp) and the device & button keys on the
+  a red `—` means the daemon source could not be loaded) | Edit (typed widget) | Description. The feel &
+  scroll-mode keys are edited on the [Scroll/Invert tab](#scrollinvert), the ramp keys on the
+  [Ramp tab](#ramp) and the device & button keys on the
   [Device Picker tab](#device-picker); there is exactly one editor per key in the whole window, all of
-  them writing to a
-  single shared edit buffer — so a change made on any tab can be applied or discarded from any tab's bar.
-  `STATE_FILE`/`DISTANCE_FILE` have no rows: they are [GUI-managed lifecycle keys](README.md#gui-managed-lifecycle-keys-state_file-distance_file).
+  them writing to a single shared edit buffer — so a change made on any tab can be applied or discarded
+  from any tab's bar. `STATE_FILE`/`DISTANCE_FILE` have no rows: they are [GUI-managed lifecycle keys](README.md#gui-managed-lifecycle-keys-state_file-distance_file).
+- **Startup tab (`STARTUP_TAB`, GUI section)** — a GUI-only key (not one of the 30 daemon keys; the
+  daemon ignores it) that picks which tab opens on startup. The combo lists every tab in display order;
+  an unset or unknown value falls back to the first one (Status & Config). Its Effective value column
+  shows what `config.ini` says, since no state-file/computed dataset ever carries it. Press Apply to make
+  a change stick — it takes effect from the next start.
 - **Apply / Cancel** (every tab page carries its own bar over the same buffer) — Apply validates inline
   against the daemon's own checks, writes `/etc/veloscroll/config.ini` through the scoped sudoers rule
   (`priv.py apply-config`), then confirms the reload from the state file (~2 s) or, without one, from the
@@ -27,6 +32,14 @@ table, this page's Apply/Cancel bar, and the [Permissions panel](#permissions-pa
   Unsaved changes are marked in every bar and in the window title.
 - External edits to `config.ini` are picked up on the 2 s refresh cycle (your unapplied edits are kept,
   with a note that Cancel now reverts to your starting point rather than the new file).
+
+## Scroll/Invert
+
+The **Feel** (`INVERT`, `INVERT_H`, `TICK`) and **Scroll mode** (`TOGGLE_SCROLL`, `TOGGLE_SCROLL_H`,
+`VERTICAL_H`, `LEFT_CLICK_RESET`) sections, moved here from the Status & Config table — same layout (Key |
+Effective value | Edit | Description), same shared edit buffer, with this tab's own Apply/Cancel bar.
+(The rate/curve/smoothing keys that used to sit in "Feel" live on the [Ramp tab](#ramp) next to their
+live curves.)
 
 ## Ramp
 
@@ -47,7 +60,8 @@ next to the mouse it belongs to.)
 - Click or drag anywhere on a plot to read the rate at that distance — the orange marker follows your
   pointer and labels it (`1.23 in → 87 notches/s`); pan/zoom is disabled, the mouse scrubs instead.
 - **Live position markers** — while a scroll session runs (button held or toggled on), that same orange
-  marker tracks the daemon's live position from `/run/veloscroll/distance` (~33 Hz) and shows `(live)`;
+  marker tracks the daemon's live position from `/run/veloscroll/distance`, polled at the daemon's
+  ticker rate (`TICK`, ~250 Hz by default), and shows `(live)`;
   on release it returns to where you last placed it by hand. The "live position markers (DISTANCE_FILE)"
   checkbox (checked by default) decides whether the GUI forces `DISTANCE_FILE = True` at startup —
   unchecking applies from the next start, and the key is always forced off again when the GUI closes
@@ -152,9 +166,12 @@ The page's Permissions group (below the values table) checks, with a copy-paste 
 
 ## Config keys (hot-reloaded)
 
-All 30 daemon keys, grouped as in the GUI — the ramp keys (Feel / Horizontal overrides) are edited on the
-Ramp tab next to their live curves, Device & buttons (plus `DPI`) on the Device Picker tab, and
-INVERT/INVERT_H/TICK with Scroll mode, Logging and Misc in the Status & Config table. A non-empty value in
+All 30 daemon keys, grouped as in the GUI — the ramp keys are edited on the [Ramp tab](#ramp) next to
+their live curves, Device & buttons (plus `DPI`) on the [Device Picker tab](#device-picker), the Feel &
+Scroll mode sections (`INVERT`, `INVERT_H`, `TICK` and the four scroll-mode flags) on the
+[Scroll/Invert tab](#scrollinvert), and Logging with Misc in the Status & Config table. Plus one GUI-only
+key, `STARTUP_TAB` (which tab opens on startup; edited on the [Status & Config page](#status--config) —
+it is not a daemon key, so it never hot-reloads: the daemon ignores it). A non-empty value in
 `/etc/veloscroll/config.ini`
 overrides the built-in default; a missing or empty key falls back to it. Edits hot-reload within ~2 s — no
 restart needed (the GUI applies them with one click). Keys with an `_H` suffix are horizontal variants; where

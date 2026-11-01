@@ -22,7 +22,7 @@ import re
 from PySide6.QtCore import QObject, Signal
 
 from . import CONFIG_PATH, DAEMON_DIR
-from .values import ALL_KEYS, _daemon_module, daemon_module_error
+from .values import ALL_KEYS, GUI_KEYS, _daemon_module, daemon_module_error
 
 # key -> widget kind (drives which editor the Config tab builds)
 KIND_BOOL = "bool"        # INVERT LATENCY_LOG TOGGLE_SCROLL VERTICAL_H LEFT_CLICK_RESET STATE_FILE DISTANCE_FILE
@@ -33,6 +33,7 @@ KIND_NFLOAT = "nfloat"    # the six *_H ramp floats — number or none (falls ba
 KIND_BTN = "btn"          # SCROLL_BTN / DISABLED_BTN / SCROLL_BTN_H — evdev name or decimal, none disables
 KIND_NAME = "name"        # NAME_MATCH — free text; empty falls back to the built-in default
 KIND_DEVICE = "device"    # DEVICE_MATCH — vendor/product pair, stable path string, or none
+KIND_TAB = "tab"          # STARTUP_TAB — GUI-owned: one of the tab labels (the daemon ignores this key)
 
 KEY_KINDS = {
     "DPI": KIND_FLOAT, "DEADZONE_IN": KIND_FLOAT, "FULL_IN": KIND_FLOAT,
@@ -45,6 +46,7 @@ KEY_KINDS = {
     "MAX_BACKUPS": KIND_INT, "STATE_FILE": KIND_BOOL, "DISTANCE_FILE": KIND_BOOL,
     "NAME_MATCH": KIND_NAME, "DEVICE_MATCH": KIND_DEVICE,
     "SCROLL_BTN": KIND_BTN, "DISABLED_BTN": KIND_BTN, "SCROLL_BTN_H": KIND_BTN,
+    "STARTUP_TAB": KIND_TAB,
 }
 
 # keys whose parsed value may be None (unset / feature off)
@@ -61,6 +63,10 @@ RAMP_KEYS = ("DEADZONE_IN", "FULL_IN", "MIN_RATE", "MAX_RATE", "CURVE", "OUT_SMO
 # chunk-4 [Capture…] buttons instead of in the Status & Config table (DPI is a property of the picked mouse).
 # The three button keys come last, in their display order: SCROLL_BTN / SCROLL_BTN_H / DISABLED_BTN
 DEVICE_KEYS = ("NAME_MATCH", "DEVICE_MATCH", "DPI", "SCROLL_BTN", "SCROLL_BTN_H", "DISABLED_BTN")
+
+# the feel & scroll-mode fields — edited on the Scroll/Invert tab instead of in the Status & Config table
+SCROLL_INVERT_KEYS = ("INVERT", "INVERT_H", "TICK",
+                      "TOGGLE_SCROLL", "TOGGLE_SCROLL_H", "VERTICAL_H", "LEFT_CLICK_RESET")
 
 # unset -> what the runtime uses instead (for the "(falls back to ...)" hints)
 FALLBACK = {
@@ -169,6 +175,9 @@ class ConfigModel(QObject):
         self.changed.emit()
 
     def _recompute_one(self, key):
+        if key in GUI_KEYS:      # GUI-owned (the daemon ignores it) — no daemon parser to run; the raw text is the value
+            self.values[key] = self.raws.get(key) or None
+            return
         mod = self._mod
         if not mod:
             return
@@ -214,6 +223,8 @@ class ConfigModel(QObject):
             return None, dict(self.field_errors), []
         values = dict(self._defaults)                      # an empty raw is skipped by the daemon, so the built-in default applies (incl. NAME_MATCH)
         for key in ALL_KEYS:
+            if key in GUI_KEYS:                            # not a daemon key — never part of what a reload would see
+                continue
             raw = self.raws.get(key, "")
             if raw:
                 values[key] = self.values.get(key)
