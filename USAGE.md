@@ -78,15 +78,12 @@ next to the mouse it belongs to.)
   button. It sets both ramps plus `VERTICAL_H`, so
   load it via the **all** checkbox on the Presets tab (`loadall`), not feel. The distance keys are
   deliberately not part of it — set them once per machine.
-- 
 - **DPI** — no per-DPI variants are needed: `DEADZONE_IN`/`FULL_IN` are in inches and converted by your
   [`DPI`](#device-picker) setting, so the physical ramp is identical at any DPI. Set `DPI` to your mouse's
   *current* DPI, not its maximum.
 - These are starting points to tune by feel, not verified values — every key hot-reloads within ~2 s and a
   malformed edit is rejected with the previous values staying in effect (the Daemon group shows it). For
-  the physical distance keys you can measure instead of guessing: run the daemon repo's tuning aid
-  `veloscroll_tuning_helper.py` with the daemon stopped and read off the inches where you cross the
-  deadzone / reach full rate.
+  the physical distance keys you can measure instead of guessing: use the **Live position markers** in the Ramp tab.
 
 ## Device Picker
 
