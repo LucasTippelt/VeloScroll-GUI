@@ -1,0 +1,4 @@
+# GUI-only dependencies, installed into .venv (created with --system-site-packages).
+# python-evdev comes from the system site-packages and is NOT pinned here.
+PySide6
+pyqtgraph

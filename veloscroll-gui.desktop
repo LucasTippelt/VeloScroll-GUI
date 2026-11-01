@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=VeloScroll GUI
+Comment=Configure and monitor the VeloScroll daemon
+Exec=/opt/veloscroll-gui/run.sh
+Terminal=false
+Categories=Utility;Qt;
