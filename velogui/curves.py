@@ -214,12 +214,23 @@ class _AxisPlot(pg.PlotWidget):
         self.dz_line.label.setText(f"deadzone {dz:g} in")
         self.full_line.setValue(full)
         self.full_line.label.setText(f"full rate at {max_r:g}/s ({full:g} in)")
-        return (0.0, xmax, 0.0, max_r * 1.25)
+        # y-top just past the full-rate point: the curve uses the whole y-axis, with a hair of headroom so
+        # the 2 px pen is not clipped at the top border (a larger pad would leave dead space above the line)
+        return (0.0, xmax, 0.0, max_r * 1.02)
 
 
 class CurvePlots(QWidget):
     """Both axis plots + the horizontal fallback annotation; re-renders from the edit buffer and,
-    when given a StateWatcher, tracks the daemon's live position with the measurement marker (distance file)."""
+    when given a StateWatcher, tracks the daemon's live position with the measurement marker (distance file).
+
+    Built as two child widgets instead of one flat column: `top` (vertical plot) and `bottom`
+    (horizontal plot). Each fills its body-grid cell exactly like the table beside it, so both graphs are
+    the same height as their tables and the gap between the graphs is just the grid spacing — the same as
+    the gap between the two tables. RampTab places them into the first two rows of its body grid so the
+    "Horizontal ramp" table starts exactly at the horizontal graph's top edge — a side-by-side layout can't
+    guarantee that, because where plot_h begins is stretch-driven by plot_v above it. The fallback note
+    (lbl_fallback) and the DISTANCE_FILE checkbox (chk_distance) are created here but placed by RampTab:
+    the note gets its own grid row directly under the horizontal graph (hidden while empty)."""
 
     # the daemon rewrites the distance doc every tick (~4 ms) while held — a doc older than this is stale
     # (e.g. the daemon died mid-hold): treat it as session ended instead of pinning the marker forever
@@ -228,33 +239,40 @@ class CurvePlots(QWidget):
     def __init__(self, model, watcher=None, parent=None):
         super().__init__(parent)
         self.model = model
-        lay = QVBoxLayout(self)
+        # `top` is just the vertical plot — zero margins so it fills its body-grid cell exactly like the
+        # "Vertical ramp" table beside it (see class docstring).
+        self.top = QWidget()
+        lay = QVBoxLayout(self.top)
         lay.setContentsMargins(0, 0, 0, 0)
-        hint = QLabel("click or drag a graph to read its rate at that distance (the orange marker follows your pointer); "
-                      "while a scroll session runs (button held, or toggled on), that same marker tracks where the daemon is right now")
-        hint.setStyleSheet("color: gray; font-size: small;")
-        lay.addWidget(hint)
         # DISTANCE_FILE has no selector row in the table — this checkbox is its only GUI control. Checked by
         # default: while checked the GUI forces it on at startup (the daemon then writes /run/veloscroll/distance,
         # which drives the live markers); it is always forced off again when the GUI closes. Unchecking applies
-        # from the next start — an opted-out key is left as configured in the meantime.
+        # from the next start — an opted-out key is left as configured in the meantime. Not laid out here:
+        # RampTab places it below the horizontal-ramp row (with a separator above it).
         self.chk_distance = QCheckBox("live position markers (DISTANCE_FILE)")
         self.chk_distance.setChecked(True)
         self.chk_distance.setToolTip(
             "While checked, the GUI turns DISTANCE_FILE on at startup so these markers track the daemon's live "
             "position while you scroll. It is always turned off again when the GUI closes; unchecking applies "
             "from the next start.")
-        lay.addWidget(self.chk_distance)
         t0, t1, _base = axis_titles(self.model.values)   # refresh() keeps them in sync with every edit
         self.plot_v = _AxisPlot(t0, PEN_V)
         self.plot_h = _AxisPlot(t1, PEN_H)
         self._title_v, self._title_h = t0, t1            # last titles pushed (avoids a setTitle per 2 s refresh)
         lay.addWidget(self.plot_v, 1)
+
+        # `bottom` is just the horizontal plot — zero margins so it fills its body-grid cell exactly like
+        # the "Horizontal ramp" table beside it (same height, and the gap between graphs = grid spacing).
+        self.bottom = QWidget()
+        blay = QVBoxLayout(self.bottom)
+        blay.setContentsMargins(0, 0, 0, 0)
+        blay.addWidget(self.plot_h, 1)
+
+        # fallback note — created here (it knows the values), placed by RampTab in its own grid row directly
+        # under plot_h so it never steals height from either graph; hidden while empty. No stylesheet:
+        # palette default text color (theme-safe).
         self.lbl_fallback = QLabel("")
-        self.lbl_fallback.setStyleSheet("color: gray;")
         self.lbl_fallback.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        lay.addWidget(self.lbl_fallback)
-        lay.addWidget(self.plot_h, 1)
 
         # edits in the Config tab replot after a short debounce (spin-box scrubbing fires many changes)
         self._debounce = QTimer(self)
@@ -302,16 +320,25 @@ class CurvePlots(QWidget):
             msg = "daemon module unavailable — cannot compute the curves"
             self.plot_v.update_curve((0.0, 0.0, 0.0, 0.0, 1.0))
             self.plot_h.update_curve((0.0, 0.0, 0.0, 0.0, 1.0))
-            self.lbl_fallback.setText(msg)
+            self._set_note(msg)
             return
         v, h, fallbacks = axis_params(values)
-        # independent scales: each plot fits its own ramp (the overrides often differ a lot from the vertical)
+        # independent scales: each plot fits its own ramp (the overrides often differ a lot from the vertical).
+        # padding=0: pyqtgraph otherwise auto-pads the requested range by ~4-5 % per side (size-dependent), which
+        # would shrink the curve away from the top edge — with zero padding the full-rate point sits at the
+        # y-top exactly as update_curve computed it.
         rng_v = self.plot_v.update_curve(v) or (0, 2, 0, 1)
-        self.plot_v.setRange(xRange=(rng_v[0], rng_v[1]), yRange=(0.0, rng_v[3]))
+        self.plot_v.setRange(xRange=(rng_v[0], rng_v[1]), yRange=(0.0, rng_v[3]), padding=0)
         rng_h = self.plot_h.update_curve(h) or (0, 2, 0, 1)
-        self.plot_h.setRange(xRange=(rng_h[0], rng_h[1]), yRange=(0.0, rng_h[3]))
+        self.plot_h.setRange(xRange=(rng_h[0], rng_h[1]), yRange=(0.0, rng_h[3]), padding=0)
         if fallbacks:
             parts = [f"{hk} unset — falls back to vertical ({values[vk]:g})" for hk, vk in fallbacks.items()]
-            self.lbl_fallback.setText(f"{h_base}: " + "; ".join(parts))
+            self._set_note(f"{h_base}: " + "; ".join(parts))
         else:
-            self.lbl_fallback.setText("")           # nothing to annotate when every override is set
+            self._set_note("")                      # nothing to annotate when every override is set
+
+    def _set_note(self, text):
+        """The note under the horizontal graph — hidden while empty so its grid row collapses and the
+        layout stays tight (RampTab gives it a dedicated row; see class docstring)."""
+        self.lbl_fallback.setText(text)
+        self.lbl_fallback.setVisible(bool(text))

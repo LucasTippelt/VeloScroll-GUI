@@ -52,14 +52,15 @@ NULLABLE = {"TOGGLE_SCROLL_H", "INVERT_H", "DEADZONE_IN_H", "FULL_IN_H", "MIN_RA
             "MAX_RATE_H", "CURVE_H", "OUT_SMOOTH_H", "DISABLED_BTN",
             "SCROLL_BTN_H", "DEVICE_MATCH"}
 
-# keys that shape a ramp (distance scaling, deadzone/full-rate distances, rates, curve, smoothing) —
-# edited on the Ramp tab next to their live curves instead of in the Status & Config table
-RAMP_KEYS = ("DPI", "DEADZONE_IN", "FULL_IN", "MIN_RATE", "MAX_RATE", "CURVE", "OUT_SMOOTH",
+# keys that shape a ramp (deadzone/full-rate distances, rates, curve, smoothing) — edited on the Ramp
+# tab next to their live curves instead of in the Status & Config table
+RAMP_KEYS = ("DEADZONE_IN", "FULL_IN", "MIN_RATE", "MAX_RATE", "CURVE", "OUT_SMOOTH",
              "DEADZONE_IN_H", "FULL_IN_H", "MIN_RATE_H", "MAX_RATE_H", "CURVE_H", "OUT_SMOOTH_H")
 
-# the device & button fields — edited on the Device Picker tab next to the mouse selector and the
-# chunk-4 [Capture…] buttons instead of in the Status & Config table
-DEVICE_KEYS = ("NAME_MATCH", "DEVICE_MATCH", "SCROLL_BTN", "DISABLED_BTN", "SCROLL_BTN_H")
+# the device, DPI & button fields — edited on the Device Picker tab next to the mouse selector and the
+# chunk-4 [Capture…] buttons instead of in the Status & Config table (DPI is a property of the picked mouse).
+# The three button keys come last, in their display order: SCROLL_BTN / SCROLL_BTN_H / DISABLED_BTN
+DEVICE_KEYS = ("NAME_MATCH", "DEVICE_MATCH", "DPI", "SCROLL_BTN", "SCROLL_BTN_H", "DISABLED_BTN")
 
 # unset -> what the runtime uses instead (for the "(falls back to ...)" hints)
 FALLBACK = {

@@ -176,8 +176,7 @@ class CaptureDialog(QDialog):
         header.setWordWrap(True)
         lay.addWidget(header)
 
-        self.lbl_source = QLabel("")
-        self.lbl_source.setStyleSheet("color: gray;")
+        self.lbl_source = QLabel("")    # no stylesheet: palette default text color (theme-safe)
         self.lbl_source.setTextInteractionFlags(Qt.TextSelectableByMouse)
         lay.addWidget(self.lbl_source)
 

@@ -35,7 +35,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(APP_NAME)
-        self.resize(1200, 800)
+        self.resize(1400, 940)
 
         self.banner = Banner()                 # hidden by default; strip above the page
         self.watcher = StateWatcher()

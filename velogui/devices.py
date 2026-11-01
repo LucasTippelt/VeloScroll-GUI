@@ -112,9 +112,10 @@ class DevicePicker(QGroupBox):
 
         lay = QVBoxLayout(self)
         top = QHBoxLayout()
+        # no forced color (theme-safe): only the size is set — palette default text color applies
         hint = QLabel("Select the mouse veloscroll should grab; writes DEVICE_MATCH into the edit buffer")
         hint.setWordWrap(True)
-        hint.setStyleSheet("color: gray; font-size: small;")
+        hint.setStyleSheet("font-size: small;")
         self.btn_rescan = QPushButton("Rescan")
         self.btn_rescan.setToolTip("Re-enumerate /dev/input (hot-plugged devices, new virtual node)")
         self.btn_rescan.clicked.connect(self.rescan)
@@ -128,7 +129,7 @@ class DevicePicker(QGroupBox):
 
         self.lbl_status = QLabel("not scanned yet")
         self.lbl_status.setWordWrap(True)
-        self.lbl_status.setStyleSheet("color: gray; font-size: small;")
+        self.lbl_status.setStyleSheet("font-size: small;")    # no forced color (theme-safe)
         self.lbl_status.setTextInteractionFlags(Qt.TextSelectableByMouse)
         lay.addWidget(self.lbl_status)
 

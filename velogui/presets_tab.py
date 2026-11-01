@@ -18,9 +18,9 @@ import re
 import time
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
-                               QMessageBox, QPlainTextEdit, QPushButton, QTableWidget,
-                               QTableWidgetItem, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QGroupBox, QHBoxLayout, QHeaderView, QLabel,
+                                QLineEdit, QMessageBox, QPlainTextEdit, QPushButton, QTableWidget,
+                                QTableWidgetItem, QVBoxLayout, QWidget)
 
 from . import CONFIG_PATH
 from .proc import PrivError, PrivJob
@@ -82,7 +82,7 @@ class PresetsTab(QWidget):
         header = QLabel("Named presets of the daemon keys — save snapshots the current config; "
                         "loads apply one key group each (the daemon reloads within ~2 s); "
                         "delete removes the selected preset.")
-        header.setStyleSheet("color: gray;")
+        # no stylesheet: palette default text color (theme-safe black on light, white on dark)
         root.addWidget(header)
 
         body = QHBoxLayout()
@@ -91,7 +91,8 @@ class PresetsTab(QWidget):
         left = QVBoxLayout()
         self.tbl_presets = QTableWidget(0, 3)
         self.tbl_presets.setHorizontalHeaderLabels(("preset", "modified", "keys"))
-        self.tbl_presets.horizontalHeader().setStretchLastSection(True)
+        # preset / modified / keys share the table width equally (and keep doing so on resize)
+        self.tbl_presets.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.tbl_presets.verticalHeader().setVisible(False)
         self.tbl_presets.setSelectionBehavior(QTableWidget.SelectRows)
         self.tbl_presets.setEditTriggers(QTableWidget.NoEditTriggers)

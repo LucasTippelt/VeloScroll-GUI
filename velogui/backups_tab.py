@@ -14,8 +14,8 @@ import time
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QBrush, QColor
-from PySide6.QtWidgets import (QHBoxLayout, QLabel, QMessageBox, QPushButton, QTableWidget,
-                               QTableWidgetItem, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QHBoxLayout, QHeaderView, QLabel, QMessageBox, QPushButton,
+                                QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
 from . import CONFIG_PATH
 from .proc import PrivError, PrivJob
@@ -88,7 +88,7 @@ class BackupsTab(QWidget):
         root.setContentsMargins(10, 8, 10, 8)
         header = QLabel("Backups made before every config overwrite (pruned per MAX_BACKUPS). "
                         "Select one to preview it against the current values; [Restore] puts it back.")
-        header.setStyleSheet("color: gray;")
+        # no stylesheet: palette default text color (theme-safe black on light, white on dark)
         root.addWidget(header)
 
         body = QHBoxLayout()
@@ -96,7 +96,12 @@ class BackupsTab(QWidget):
         left = QVBoxLayout()
         self.tbl_backups = QTableWidget(0, 4)
         self.tbl_backups.setHorizontalHeaderLabels(("backup", "target", "modified", "keys"))
-        self.tbl_backups.horizontalHeader().setStretchLastSection(True)
+        # backup names are long (.bak-<timestamp>) and modified is a fixed date+time — give both real room;
+        # keys (a small number) stays narrow instead of stretching to fill the table
+        self.tbl_backups.setColumnWidth(0, 280)
+        self.tbl_backups.setColumnWidth(1, 120)
+        self.tbl_backups.setColumnWidth(2, 145)
+        self.tbl_backups.setColumnWidth(3, 60)
         self.tbl_backups.verticalHeader().setVisible(False)
         self.tbl_backups.setSelectionBehavior(QTableWidget.SelectRows)
         self.tbl_backups.setEditTriggers(QTableWidget.NoEditTriggers)
@@ -117,19 +122,21 @@ class BackupsTab(QWidget):
         body.addLayout(left, 5)
 
         right = QVBoxLayout()
+        # no forced color (theme-safe): only the size is set — palette default text color applies
         lbl_detail = QLabel("preview — amber rows differ from the current effective value")
-        lbl_detail.setStyleSheet("color: gray; font-size: small;")
+        lbl_detail.setStyleSheet("font-size: small;")
         right.addWidget(lbl_detail)
         self.tbl_diff = QTableWidget(0, 3)
         self.tbl_diff.setHorizontalHeaderLabels(("key", "in backup", "current"))
-        self.tbl_diff.horizontalHeader().setStretchLastSection(True)
+        # key / in backup / current share the table width equally (and keep doing so on resize)
+        self.tbl_diff.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.tbl_diff.verticalHeader().setVisible(False)
         self.tbl_diff.setEditTriggers(QTableWidget.NoEditTriggers)
         right.addWidget(self.tbl_diff, 1)
 
         self.lbl_status = QLabel("not scanned yet")
         self.lbl_status.setWordWrap(True)
-        self.lbl_status.setStyleSheet("color: gray; font-size: small;")
+        self.lbl_status.setStyleSheet("font-size: small;")    # no forced color (theme-safe)
         self.lbl_status.setTextInteractionFlags(Qt.TextSelectableByMouse)
         right.addWidget(self.lbl_status)
         body.addLayout(right, 6)

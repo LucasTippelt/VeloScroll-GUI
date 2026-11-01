@@ -102,6 +102,17 @@ FLOAT_GEOM = {
     "TICK": (4, 0.0005, 1.0, 0.001),
 }
 
+# float spin-box geometry per nullable *_H ramp key: (decimals, min, max, step) — value 0 means unset
+# (shown via specialValueText and written as "none"), mirroring the vertical keys' > 0 ranges
+NFLOAT_GEOM = {
+    "DEADZONE_IN_H": (3, 0.0, 50.0, 0.005),
+    "FULL_IN_H": (3, 0.0, 100.0, 0.05),
+    "MIN_RATE_H": (1, 0.0, 10000.0, 0.5),
+    "MAX_RATE_H": (1, 0.0, 10000.0, 1.0),
+    "CURVE_H": (2, 0.0, 10.0, 0.05),
+    "OUT_SMOOTH_H": (2, 0.0, 1.0, 0.05),
+}
+
 RED_BORDER = "border: 1px solid #dc2626; border-radius: 3px;"
 OK_BORDER = ""
 
@@ -149,7 +160,15 @@ class _FieldRow(QWidget):
             self.editor.setRange(lo, hi)
             self.editor.setSingleStep(step)
             self.editor.valueChanged.connect(lambda _v: self.changed.emit())
-        else:                                            # nfloat / btn / name / device — the daemon's text syntax
+        elif kind == "nfloat":                           # nullable *_H ramp floats — spin box with 0 = unset
+            dec, lo, hi, step = NFLOAT_GEOM[key]
+            self.editor = QDoubleSpinBox()
+            self.editor.setDecimals(dec)
+            self.editor.setRange(lo, hi)
+            self.editor.setSingleStep(step)
+            self.editor.setSpecialValueText("(unset)")
+            self.editor.valueChanged.connect(lambda _v: self.changed.emit())
+        else:                                            # btn / name / device — the daemon's text syntax
             ph = {k: f"(unset — {FALLBACK[k][0]})" for k in NULLABLE}.get(key, "")
             if key == "NAME_MATCH":
                 ph = "(built-in default applies)"
@@ -174,8 +193,8 @@ class _FieldRow(QWidget):
             self.capture_btn = None
             self.container = self.editor
 
+        # no stylesheet: palette default text color (theme-safe black/white); set_state applies red on error
         self.hint = QLabel(hint)
-        self.hint.setStyleSheet("color: gray;")
         self.hint.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self._hint_default = hint
 
@@ -187,6 +206,8 @@ class _FieldRow(QWidget):
             return "" if e.currentIndex() == 0 else e.itemText(e.currentIndex())
         if isinstance(e, (QSpinBox, QDoubleSpinBox)):
             v = e.value()
+            if self.key in NFLOAT_GEOM and v == 0.0:    # spin-box floor = unset ("none" at write time)
+                return ""
             return _fmt_float(v, e.decimals()) if isinstance(e, QDoubleSpinBox) else str(int(v))
         return e.text().strip()
 
@@ -200,7 +221,8 @@ class _FieldRow(QWidget):
         elif isinstance(e, (QSpinBox, QDoubleSpinBox)):
             e.blockSignals(True)
             try:
-                e.setValue(float(value))
+                v = 0.0 if value is None and self.key in NFLOAT_GEOM else float(value)   # unset -> spin-box floor
+                e.setValue(v)
             except (TypeError, ValueError):
                 pass
             e.blockSignals(False)
@@ -218,7 +240,7 @@ class _FieldRow(QWidget):
             self.editor.setStyleSheet(OK_BORDER)
             text = dynamic_hint if dynamic_hint is not None else self._hint_default
             self.hint.setText(text)
-            self.hint.setStyleSheet("color: gray;")
+            self.hint.setStyleSheet("")    # clear the error's red — palette default text color (theme-safe)
 
 
 class ConfigTab(QWidget):
@@ -261,11 +283,12 @@ class ConfigTab(QWidget):
         grid.addWidget(self.lbl_service)
         grid.addStretch(1)
         dev_col = QVBoxLayout()
+        # no forced color (theme-safe): only the size is set — palette default text color applies
         dev_title = QLabel("grabbed devices")
-        dev_title.setStyleSheet("color: gray; font-size: small;")
+        dev_title.setStyleSheet("font-size: small;")
         reload_col = QVBoxLayout()
         reload_title = QLabel("config reload health")
-        reload_title.setStyleSheet("color: gray; font-size: small;")
+        reload_title.setStyleSheet("font-size: small;")
         dev_col.addWidget(dev_title)
         dev_col.addWidget(self.lbl_devices)
         reload_col.addWidget(reload_title)
@@ -275,21 +298,9 @@ class ConfigTab(QWidget):
         root.addWidget(dg)
 
         # -- unified values table: Key | Effective value | Edit | Description --------
-        self.lbl_dataset = QLabel("")
-        self.lbl_dataset.setStyleSheet("color: gray;")
+        self.lbl_dataset = QLabel("")    # no stylesheet: palette default text color (theme-safe)
         self.lbl_dataset.setTextInteractionFlags(Qt.TextSelectableByMouse)
         root.addWidget(self.lbl_dataset)
-
-        self.table = QTableWidget(0, 4)
-        self.table.setHorizontalHeaderLabels(("Key", "Effective value", "Edit", "Description"))
-        self.table.verticalHeader().setVisible(False)
-        self.table.setEditTriggers(QTableWidget.NoEditTriggers)   # editing happens through the embedded widgets
-        self.table.setSelectionMode(QTableWidget.NoSelection)
-        self.table.horizontalHeader().setStretchLastSection(True)
-        self.table.setColumnWidth(0, 170)
-        self.table.setColumnWidth(1, 230)
-        self.table.setColumnWidth(2, 320)
-        self.table.verticalHeader().setDefaultSectionSize(34)
 
         # one row object per key — the Ramp tab takes its share (RAMP_KEYS) and the Device Picker tab
         # its DEVICE_KEYS out of this table at construction time; only SECTIONS' keys stay here
@@ -302,28 +313,9 @@ class ConfigTab(QWidget):
                     lambda _pressed=False, k=key: self._open_capture(k))
             self.rows[key] = row
 
-        for name, keys in SECTIONS:                    # only the non-ramp / non-device sections remain on this page
-            r = self.table.rowCount()
-            self.table.insertRow(r)
-            sec = QTableWidgetItem(name)
-            f = sec.font(); f.setBold(True); sec.setFont(f)
-            # explicit colors (not Qt.lightGray): a forced light background with the palette's white text
-            # is unreadable under dark themes — this pair stays legible in both
-            sec.setBackground(QColor("#d1d5db"))
-            sec.setForeground(QColor("#1f2937"))
-            self.table.setItem(r, 0, sec)
-            self.table.setSpan(r, 0, 1, 4)
-            for key in keys:
-                r = self.table.rowCount()
-                self.table.insertRow(r)
-                row = self.rows[key]
-                self.table.setItem(r, 0, QTableWidgetItem(key))
-                eff = QTableWidgetItem("")
-                self.table.setItem(r, 1, eff)
-                self._eff_items[key] = eff
-                self.table.setCellWidget(r, 2, row.container)
-                self.table.setCellWidget(r, 3, row.hint)
-
+        # only the non-ramp / non-device sections remain on this page; the Ramp and Device Picker tabs
+        # build their own tables with make_section_table (the same layout) for their shares of the rows
+        self.table, _bands = self.make_section_table(SECTIONS)
         root.addWidget(self.table, 1)
 
         # this page's own Apply/Cancel bar; the Ramp and Device Picker tabs register theirs too —
@@ -352,6 +344,51 @@ class ConfigTab(QWidget):
         """A tab page's Apply/Cancel bar (apply_bar.py). The buffer is one, so validation state,
         the dirty mark, and busy state are pushed to every registered bar from this tab."""
         self._bars.append(bar)
+
+    def make_section_table(self, sections, description=True):
+        """A section table with the same layout as this page's main table: Key | Effective value |
+        Edit | Description columns (description=False drops the last column — the Ramp tab shows its
+        focused field's hint at the bottom instead), one band row per section (same colors), 34 px rows.
+        The edit cells host the shared _FieldRow container/hint widgets and every effective-value cell
+        joins self._eff_items so refresh() keeps it live exactly like the main table's.
+
+        Returns (table, {section name: band item}) — callers may rename a band live (the Ramp tab does)."""
+        cols = 4 if description else 3
+        tbl = QTableWidget(0, cols)
+        tbl.setHorizontalHeaderLabels(("Key", "Effective value", "Edit") + (("Description",) if description else ()))
+        tbl.verticalHeader().setVisible(False)
+        tbl.setEditTriggers(QTableWidget.NoEditTriggers)   # editing happens through the embedded widgets
+        tbl.setSelectionMode(QTableWidget.NoSelection)
+        tbl.horizontalHeader().setStretchLastSection(True)
+        tbl.setColumnWidth(0, 170)
+        tbl.setColumnWidth(1, 230)
+        tbl.setColumnWidth(2, 320)
+        tbl.verticalHeader().setDefaultSectionSize(34)
+        bands = {}
+        for name, keys in sections:
+            r = tbl.rowCount()
+            tbl.insertRow(r)
+            sec = QTableWidgetItem(name)
+            f = sec.font(); f.setBold(True); sec.setFont(f)
+            # explicit colors (not Qt.lightGray): a forced light background with the palette's white text
+            # is unreadable under dark themes — this pair stays legible in both
+            sec.setBackground(QColor("#d1d5db"))
+            sec.setForeground(QColor("#1f2937"))
+            tbl.setItem(r, 0, sec)
+            tbl.setSpan(r, 0, 1, cols)
+            bands[name] = sec
+            for key in keys:
+                r = tbl.rowCount()
+                tbl.insertRow(r)
+                row = self.rows[key]
+                tbl.setItem(r, 0, QTableWidgetItem(key))
+                eff = QTableWidgetItem("")
+                tbl.setItem(r, 1, eff)
+                self._eff_items[key] = eff
+                tbl.setCellWidget(r, 2, row.container)
+                if description:
+                    tbl.setCellWidget(r, 3, row.hint)
+        return tbl, bands
 
     # -- live refresh (merged Status role) ------------------------------------------
 
