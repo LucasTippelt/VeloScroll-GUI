@@ -9,7 +9,8 @@ unprivileged: it refuses to run when euid != 0.
 
 Subcommands:
   ping                  liveness probe for the permissions panel
-  apply-config <tmp>    validate + atomically replace /etc/veloscroll/config.ini
+  apply-config          read the whole config text from stdin, then validate + atomically replace
+                        /etc/veloscroll/config.ini (no path argument — root never opens a caller-chosen file)
   logs [N]              last N journal lines of the veloscroll service (default 50)
   devices               enumerate every /dev/input/event* node as JSON on stdout (root fallback for the
                         device picker when in-process opens fail, e.g. user not in input group)
@@ -40,6 +41,7 @@ DAEMON_DIR = "/opt/veloscroll"
 GUI_DIR = "/opt/veloscroll-gui"
 CONFIG_PATH = "/etc/veloscroll/config.ini"
 SERVICE = "veloscroll"
+MAX_CONFIG_BYTES = 1024 * 1024   # configs are ~5 KB — a hard cap on the stdin text (cheap defense-in-depth)
 
 
 def _fail(msg, code):
@@ -168,11 +170,23 @@ def apply_config_text(text, config_path=CONFIG_PATH):
 
 
 def cmd_apply_config(args):
+    """Read the whole config text from stdin and validate + atomically replace CONFIG_PATH.
+
+    No path argument: root never opens a caller-chosen file, so neither a parse-error echo nor a
+    successful write can ever leak or copy an arbitrary file (the old <tmp> form could — feeding it
+    /etc/shadow leaked the first line on parse failure and copied the whole file on success)."""
+    if args:
+        _fail("apply-config takes no arguments — the config text is read from stdin", 1)
     try:
-        with open(args[0], "r", encoding="utf-8") as f:
-            text = f.read()
+        data = sys.stdin.buffer.read()
     except OSError as exc:
-        _fail(f"cannot read {args[0]}: {exc}", 1)
+        _fail(f"could not read the config text from stdin: {exc}", 1)
+    if len(data) > MAX_CONFIG_BYTES:
+        _fail(f"config text too large ({len(data)} bytes; cap is {MAX_CONFIG_BYTES})", 1)
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        _fail(f"config text is not valid UTF-8: {exc}", 1)
     ok, msg = apply_config_text(text)
     if not ok:
         _fail(msg, 1)
@@ -493,7 +507,7 @@ def cmd_update_gui(args):
 # name -> (handler, min_arg_count)
 COMMANDS = {
     "ping": (lambda a: print("pong"), 0),
-    "apply-config": (cmd_apply_config, 1),
+    "apply-config": (cmd_apply_config, 0),
     "logs": (cmd_logs, 0),
     "devices": (cmd_devices, 0),
     "service": (cmd_service, 1),

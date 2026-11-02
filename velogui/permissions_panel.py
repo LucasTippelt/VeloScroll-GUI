@@ -1,10 +1,12 @@
-"""Permissions panel: four prerequisite checks, each gap with its copy-paste fix.
+"""Permissions panel: five prerequisite checks, each gap with its copy-paste fix.
 
 Checks (per plan):
  1. sudo rule   — `sudo -n helpers/priv.py ping` via proc.run_priv
  2. input group — current user in the `input` group (needed to open /dev/input/* in-process)
  3. config.ini  — /etc/veloscroll/config.ini exists
  4. unit        — unit file present AND `systemctl is-enabled veloscroll` == enabled
+ 5. helper      — helpers/priv.py root-owned and without user/group write bits (a user-writable
+                  sudo-run helper is a live privilege-escalation vector)
 
 All checks run synchronously on [Re-check] (the ping call fails fast via -n).
 """
@@ -138,11 +140,31 @@ def check_unit():
     return True, "unit file present and service enabled", None
 
 
+def check_helper_integrity(path=PRIV_PATH):
+    """The sudo-executed helper must stay out of the user's reach: it runs as root under the scoped
+    rule, so a user-writable priv.py is a live privilege-escalation vector (the user edits what
+    sudo runs). Passes only when root-owned with no group/other write bits — 755 (the README mode)
+    keeps the exec bit and passes; owner bits are irrelevant once uid == 0."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return False, f"{path} is missing — reinstall the GUI", None
+    if st.st_uid != 0 or (st.st_mode & 0o022):
+        detail = (f"{path} is not root-owned and/or has user/group write bits "
+                  f"(uid={st.st_uid}, mode={oct(st.st_mode & 0o777)}) — a user-writable helper that sudo runs as root "
+                  "is an escalation vector. A manual `git pull` in the GUI repo run as your user re-creates it "
+                  "user-owned if a commit touches it (the repo is user-owned per README step 5); "
+                  "`priv.py update-gui` is safe — its git runs as root.")
+        return False, detail, f"sudo chown root:root {PRIV_PATH}\nsudo chmod 755 {PRIV_PATH}"
+    return True, f"{path} is root-owned and not user/group-writable", None
+
+
 CHECKS = (
     ("sudo rule", check_sudo_rule),
     ("input group", check_input_group),
     ("config.ini", check_config),
     ("systemd unit", check_unit),
+    ("helper integrity", check_helper_integrity),
 )
 
 _MONO = QFont("monospace")
@@ -181,7 +203,7 @@ class _CheckRow(QWidget):
 
 
 class PermissionsPanel(QGroupBox):
-    """The four checks as rows (OK/gap + fix command), rerunnable via [Re-check]."""
+    """The five checks as rows (OK/gap + fix command), rerunnable via [Re-check]."""
 
     checked = Signal()   # emitted after a full re-run (synchronous)
 
@@ -199,7 +221,7 @@ class PermissionsPanel(QGroupBox):
         lay.addLayout(self._rows_box)
 
     def recheck(self):
-        """Runs all four checks synchronously and rebuilds the rows."""
+        """Runs all five checks synchronously and rebuilds the rows."""
         results = []
         for name, fn in CHECKS:
             try:

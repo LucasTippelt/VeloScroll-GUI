@@ -68,7 +68,11 @@ install needs — device and button selection happen in the GUI after first laun
 
    ```sh
    sudo chown -R $USER:$USER /opt/veloscroll-gui
+   sudo chown root:root /opt/veloscroll-gui/helpers/priv.py   # runs via sudo — must stay out of user reach
+   sudo chmod 755 /opt/veloscroll-gui/helpers/priv.py
    ```
+
+   The helper executes as root under the scoped sudoers rule, so a user-writable `helpers/priv.py` is a live privilege-escalation vector — it must stay root-owned.
 
 6. **GUI virtualenv** — the GUI runs from a project venv at `.venv`; `run.sh` execs its interpreter (one-time):
 
@@ -85,9 +89,9 @@ install needs — device and button selection happen in the GUI after first laun
    same command — if validation fails, fix before relying on the GUI's privileged operations:
 
    ```sh
-   chmod +x /opt/veloscroll-gui/helpers/priv.py    # direct execution (own shebang), like the preset rule
-   echo 'lucas ALL=(root) NOPASSWD: /opt/veloscroll-gui/helpers/priv.py' \
-     | sudo tee /etc/sudoers.d/veloscroll-gui && sudo visudo -cf /etc/sudoers.d/veloscroll-gui
+    chmod +x /opt/veloscroll-gui/helpers/priv.py    # direct execution (own shebang), like the preset rule
+    echo "$USER ALL=(root) NOPASSWD: /opt/veloscroll-gui/helpers/priv.py" \
+      | sudo tee /etc/sudoers.d/veloscroll-gui && sudo visudo -cf /etc/sudoers.d/veloscroll-gui
    ```
 
    One command, any subcommand — same trade-off as the documented preset rule. The rule names `priv.py`

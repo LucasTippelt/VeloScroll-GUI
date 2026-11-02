@@ -186,7 +186,8 @@ The page's Permissions group (below the values table) checks, with a copy-paste 
 1. the scoped sudoers rule (`sudo -n ... priv.py ping`),
 2. current user in the `input` group,
 3. `/etc/veloscroll/config.ini` exists,
-4. unit file present at `/etc/systemd/system/veloscroll.service` and service enabled.
+4. unit file present at `/etc/systemd/system/veloscroll.service` and service enabled,
+5. `helpers/priv.py` root-owned and not user/group-writable — it runs as root under the sudoers rule, so a user-writable helper would be an escalation vector (a manual `git pull` in the GUI repo can re-create it user-owned; [Re-check] surfaces that drift with the copy-paste fix).
 
 ## Config keys (hot-reloaded)
 

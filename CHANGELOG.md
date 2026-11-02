@@ -6,7 +6,12 @@
 
 # v1.3.3
 
-- Verified update functionality as described in v1.3.2. Works.
+**GUI-only changes, parity with Daemon v1.3.X**.
+- Verified update functionality as described in v1.3.2.
+- **Startup update indicator** — the Daemon group now compares local HEAD against `origin`'s for both repos at startup (read-only `git ls-remote`, no writes to `.git`, so it works on fresh root-owned installs; no hardcoded branch name): an amber "Update to DAEMON/GUI available" note appears below the two update buttons when a repo is behind, and re-checks after each update dialog. Hidden when up to date or unknown (offline / non-git install) — it shows only actionable news.
+- **apply-config hardening** — `priv.py apply-config` now reads the whole config text from stdin instead of opening a caller-chosen path: the root helper can no longer read an arbitrary file, and its error echoes can only ever contain text the GUI itself generated (the old form leaked the first line of e.g. `/etc/shadow` on parse failure and copied the entire file into `config.ini` on success). A 1 MiB cap bounds the input.
+- **priv.py stays root-owned** — README step 5 now re-chowns `helpers/priv.py` to `root:root` after the repo-wide user chown (a user-writable sudo-run helper is a live privilege-escalation vector), and the Permissions panel gains a fifth check row that surfaces any ownership drift (e.g. from a manual `git pull`) with the copy-paste fix.
+- The README's sudoers example now uses `$USER` instead of a hardcoded username, matching the permissions panel's own fix text.
 
 # v1.3.2
 

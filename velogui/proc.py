@@ -20,14 +20,15 @@ class PrivJob(QThread):
     finished_ok = Signal(str)      # priv.py stdout on success
     failed = Signal(str, str)      # (PrivError.kind, detail incl. captured stderr)
 
-    def __init__(self, args, parent=None, timeout=TIMEOUT_S):
+    def __init__(self, args, parent=None, timeout=TIMEOUT_S, input_text=None):
         super().__init__(parent)
         self._args = [str(a) for a in args]
         self._timeout = timeout
+        self._input_text = input_text
 
     def run(self):
         try:
-            out = run_priv(self._args, timeout=self._timeout)
+            out = run_priv(self._args, timeout=self._timeout, input_text=self._input_text)
         except PrivError as e:
             detail = (e.stderr or str(e)).strip()
             self.failed.emit(e.kind, detail)
@@ -48,11 +49,14 @@ class PrivError(Exception):
         self.stderr = stderr
 
 
-def run_priv(args, timeout=TIMEOUT_S):
-    """Run the allowlisted helper as root. Returns stripped stdout on success."""
+def run_priv(args, timeout=TIMEOUT_S, input_text=None):
+    """Run the allowlisted helper as root. Returns stripped stdout on success.
+
+    `input_text` is piped to the helper's stdin (apply-config reads its config text from there);
+    sudo forwards a non-tty stdin straight through with -n."""
     cmd = ["sudo", "-n", PRIV_PATH] + [str(a) for a in args]
     try:
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, input=input_text)
     except FileNotFoundError as exc:
         raise PrivError(PrivError.KIND_COMMAND_FAILED, f"could not start sudo: {exc}")
     except subprocess.TimeoutExpired:

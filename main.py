@@ -132,6 +132,9 @@ class MainWindow(QMainWindow):
         self._open_startup_tab()
         self.refresh()
         self._refresh_timer.start()
+        # startup update indicator: local HEAD vs origin's for both repos (read-only, off-thread;
+        # hidden when up to date or unknown — offline / non-git install never blocks startup)
+        self.tab_config.check_updates()
 
     def _open_startup_tab(self):
         """STARTUP_TAB (GUI-only key, edited on the Status & Config page) picks the tab opened on

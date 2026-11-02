@@ -30,7 +30,6 @@ row in this page's table; the daemon ignores the key itself.
   the previous text back through the same privileged path so the daemon reloads it.
 """
 import os
-import tempfile
 
 from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QBrush, QColor
@@ -46,6 +45,7 @@ from .config_model import FALLBACK, GUI_KEYS, KEY_KINDS, NULLABLE, RAMP_KEYS, _r
 from .errors import popup_error
 from .permissions_panel import PermissionsPanel, SUDOERS_FIX
 from .proc import PrivError, PrivJob, run_priv
+from .update_check import UpdateCheckJob
 from .update_dialog import UpdateDialog
 
 _SERVICE_COLORS = {"active": "#16a34a", "failed": "#dc2626"}
@@ -328,6 +328,12 @@ class ConfigTab(QWidget):
             "The dialog shows a transcript of every step plus a rollback command for the previous commit.")
         btn_update_gui.clicked.connect(self._open_gui_update_dialog)
         update_col.addWidget(btn_update_gui)
+        # startup update indicator (update_check.py): amber = actionable news only — hidden when both
+        # repos are up to date or the check is unknown (offline / non-git install); no green state
+        self.lbl_update_avail = QLabel("")
+        self.lbl_update_avail.setStyleSheet("color: #d97706; font-size: small;")
+        self.lbl_update_avail.hide()
+        update_col.addWidget(self.lbl_update_avail)
         update_col.addStretch(1)
         grid.addWidget(update_wrap, 0, Qt.AlignVCenter)
         root.addWidget(dg)
@@ -585,10 +591,37 @@ class ConfigTab(QWidget):
     def _open_update_dialog(self):
         """[Update daemon…] on the Daemon group: modal dialog with confirm + transcript (update_dialog.py)."""
         UpdateDialog(self.window(), target="daemon").exec()
+        self.check_updates()          # a pulled update clears/refreshes the indicator
 
     def _open_gui_update_dialog(self):
         """[Update GUI…] directly below [Update daemon…]: same dialog for the /opt/veloscroll-gui checkout."""
         UpdateDialog(self.window(), target="gui").exec()
+        self.check_updates()          # a pulled update clears/refreshes the indicator
+
+    def check_updates(self):
+        """Compare local HEAD against origin's for both repos (read-only, off-thread); the result
+        drives lbl_update_avail. Started once from MainWindow.start() and re-run after any UpdateDialog
+        finishes — no periodic re-check."""
+        if getattr(self, "_update_job", None) is not None and self._update_job.isRunning():
+            return                                  # one check at a time (a stale result would race it)
+        job = UpdateCheckJob(self)
+        job.results.connect(self._on_update_check)
+        self._update_job = job
+        job.start()
+
+    def _on_update_check(self, results):
+        daemon_avail, gui_avail = results
+        if daemon_avail and gui_avail:
+            text = "Update to DAEMON and GUI available"
+        elif daemon_avail:
+            text = "Update to DAEMON available"
+        elif gui_avail:
+            text = "Update to GUI available"
+        else:                                       # neither has an update, or the check was unknown (offline / non-git)
+            self.lbl_update_avail.hide()
+            return
+        self.lbl_update_avail.setText(text)
+        self.lbl_update_avail.show()
 
     def _on_app_quit(self):
         """Quit must never leave the daemon down because a capture dialog stopped it."""
@@ -653,16 +686,10 @@ class ConfigTab(QWidget):
         if text == self.disk_text:
             self._banner("no changes to apply", "success")
             return
-        try:
-            fd, tmp = tempfile.mkstemp(prefix="veloscroll-gui-apply-", suffix=".ini")
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                f.write(text)
-        except OSError as exc:
-            popup_error(self.window(), "Could not prepare the new config", str(exc))
-            return
+        # the config text goes over stdin — priv.py never opens a caller-chosen path as root
         self._set_busy(True, "Applying…")
-        self._pending = (tmp, text, values)
-        job = PrivJob(["apply-config", tmp], self)
+        self._pending = (text, values)
+        job = PrivJob(["apply-config"], self, input_text=text)
         job.finished_ok.connect(self._on_apply_done)      # Signal(str): priv.py stdout
         job.failed.connect(self._on_priv_fail)            # Signal(str, str): (kind, detail)
         job.start()
@@ -673,10 +700,6 @@ class ConfigTab(QWidget):
             return None
         pending = self._pending
         self._pending = None
-        try:
-            os.unlink(pending[0])
-        except OSError:
-            pass
         self._set_busy(False)
         return pending
 
@@ -684,7 +707,7 @@ class ConfigTab(QWidget):
         pending = self._take_pending()
         if pending is None:
             return
-        tmp, text, values = pending
+        text, values = pending
         self.pre_apply_text = self.disk_text      # Cancel can revert to this after the apply
         self.disk_text = text
         try:
@@ -780,21 +803,15 @@ class ConfigTab(QWidget):
         if self.pre_apply_text is not None and self.pre_apply_text != self.disk_text:
             # a change was applied earlier in this session — write the previous text back so the daemon reloads it
             prev = self.pre_apply_text
-            try:
-                fd, tmp = tempfile.mkstemp(prefix="veloscroll-gui-apply-", suffix=".ini")
-                with os.fdopen(fd, "w", encoding="utf-8") as f:
-                    f.write(prev)
-            except OSError as exc:
-                popup_error(self.window(), "Could not prepare the revert", str(exc))
-                return
+            # the previous text goes over stdin — priv.py never opens a caller-chosen path as root
             self._set_busy(True, "Reverting…")
-            self._pending = (tmp, prev, None)
+            self._pending = (prev, None)
 
             def _on_revert_done(_out):
                 pending = self._take_pending()
                 if pending is None:
                     return
-                text = pending[1]
+                text = pending[0]
                 self.disk_text = text
                 self.pre_apply_text = None        # the revert is done; nothing left to roll back to
                 self.model.load_text(text)
@@ -809,7 +826,7 @@ class ConfigTab(QWidget):
                 else:
                     self._banner("reverted — daemon is not running; previous config takes effect at its next start", "success")
 
-            job = PrivJob(["apply-config", tmp], self)
+            job = PrivJob(["apply-config"], self, input_text=prev)
             job.finished_ok.connect(_on_revert_done)   # Signal(str): priv.py stdout
             job.failed.connect(self._on_priv_fail)     # Signal(str, str): (kind, detail) — shared with Apply
             job.start()
@@ -859,20 +876,9 @@ class ConfigTab(QWidget):
         if not updates or not (self.disk_text or "").strip():
             return                                   # nothing on to turn off / file was never readable
         try:
-            fd, tmp = tempfile.mkstemp(prefix="veloscroll-gui-apply-", suffix=".ini")
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                f.write(_render(self.disk_text, updates))
-        except OSError:
-            return
-        try:
-            run_priv(["apply-config", tmp], timeout=10)
+            run_priv(["apply-config"], timeout=10, input_text=_render(self.disk_text, updates))
         except PrivError:
             pass                                     # best effort at exit — the daemon keeps its current state
-        finally:
-            try:
-                os.unlink(tmp)
-            except OSError:
-                pass
 
     def _wait_idle(self, limit_ms=5000):
         """Bounded wait for an in-flight Apply/Cancel (e.g. the startup STATE_FILE write) so the exit
