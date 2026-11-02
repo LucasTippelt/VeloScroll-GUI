@@ -22,7 +22,7 @@ table, this page's Apply/Cancel bar, and the [Permissions panel](#permissions-pa
   systemd; instead, after a successful pull that changes code, the running instance closes & reopens itself
   automatically (an "already up to date" no-op leaves it untouched). It shows the same transcript and offers
   the previous commit as a one-line rollback command. Your `config.ini` lives outside both repos and is
-  untouched either way.
+  untouched either way. 
 - **Values table** — one row per key with four columns: Key | Effective value (live from the state file;
   a red `—` means the daemon source could not be loaded) | Edit (typed widget) | Description. The feel &
   scroll-mode keys are edited on the [Scroll/Invert tab](#scrollinvert), the ramp keys on the
