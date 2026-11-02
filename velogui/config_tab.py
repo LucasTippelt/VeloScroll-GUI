@@ -29,6 +29,7 @@ row in this page's table; the daemon ignores the key itself.
 - Cancel restores the editor from memory and, when a change was already applied, writes
   the previous text back through the same privileged path so the daemon reloads it.
 """
+import math
 import os
 
 from PySide6.QtCore import Qt, QThread, QTimer, Signal
@@ -271,6 +272,7 @@ class ConfigTab(QWidget):
         self.disk_text = ""           # last known content of CONFIG_PATH (dirty comparison target)
         self.pre_apply_text = None    # content before the last successful apply (Cancel reverts to it)
         self._disk_sig = None         # (mtime_ns, size) of disk_text
+        self._check_manual = False    # a user-initiated [Check for updates…] is in flight (completion feedback)
         self._busy = False
         self._confirm = None          # {"values": {...}} while waiting for a reload confirmation
         self._confirm_timer = QTimer(self)
@@ -309,8 +311,9 @@ class ConfigTab(QWidget):
         reload_col.addWidget(self.lbl_reload)
         grid.addLayout(dev_col, 1)
         grid.addLayout(reload_col, 1)
-        # the two one-click updates stacked (daemon first, GUI directly below it), vertically centered in their cell —
-        # a wrapper widget because QBoxLayout.addLayout() takes no alignment argument
+        # the two one-click updates stacked (daemon first, GUI directly below it) plus the on-demand
+        # re-check of both repos against their origins, vertically centered in their cell — a wrapper
+        # widget because QBoxLayout.addLayout() takes no alignment argument
         update_wrap = QWidget()
         update_col = QVBoxLayout(update_wrap)
         update_col.setContentsMargins(0, 0, 0, 0)
@@ -328,6 +331,13 @@ class ConfigTab(QWidget):
             "The dialog shows a transcript of every step plus a rollback command for the previous commit.")
         btn_update_gui.clicked.connect(self._open_gui_update_dialog)
         update_col.addWidget(btn_update_gui)
+        btn_check_updates = QPushButton("Check for updates…")
+        btn_check_updates.setToolTip(
+            "Re-check now whether the daemon or GUI repo is behind its origin (read-only git ls-remote, "
+            "no changes). An available update shows in the amber note below; a clean check flashes a "
+            "status-bar confirmation instead.")
+        btn_check_updates.clicked.connect(self._on_check_updates)
+        update_col.addWidget(btn_check_updates)
         # startup update indicator (update_check.py): amber = actionable news only — hidden when both
         # repos are up to date or the check is unknown (offline / non-git install); no green state
         self.lbl_update_avail = QLabel("")
@@ -487,6 +497,28 @@ class ConfigTab(QWidget):
             label += "  ·  " + "; ".join(errors)
         self.lbl_dataset.setText(label)
 
+        self._refresh_tick_hint(state)
+
+    def _refresh_tick_hint(self, state):
+        """TICK row's description: live Hz figure + period from the actually active tickrate (the same
+        resolution as the Effective column — unapplied edits don't change it); static TITLES text when
+        unavailable or malformed. Written only on change (no churn every 2 s refresh)."""
+        values, _, _ = vmod.resolve(state)   # state-file snapshot first, else in-process load_config()
+        tick = values.get("TICK") if isinstance(values, dict) else None
+        text = TITLES["TICK"][1]             # static example — the initial and degraded-state wording
+        if not isinstance(tick, bool) and isinstance(tick, (int, float)):
+            try:
+                t = float(tick)
+            except (OverflowError, ValueError):
+                t = None
+            if t is not None and math.isfinite(t) and t > 0:
+                text = f"ticker period in seconds (~{round(1 / t)} Hz at {vmod.format_value('TICK', tick)})"
+        row = self.rows["TICK"]
+        if row.hint.styleSheet():      # a validation error is showing — let it keep the label until revalidated
+            return
+        if row.hint.text() != text:    # no churn every 2 s refresh
+            row.hint.setText(text)
+
     # -- loading / refresh ------------------------------------------------------
 
     def _read_config_file(self):
@@ -598,10 +630,21 @@ class ConfigTab(QWidget):
         UpdateDialog(self.window(), target="gui").exec()
         self.check_updates()          # a pulled update clears/refreshes the indicator
 
+    def _on_check_updates(self):
+        """[Check for updates…] on the Daemon group: re-run the read-only local-vs-origin comparison now.
+
+        The indicator row doubles as progress ("checking for updates…"); a check that finds nothing
+        still gets a status-bar confirmation — but only when the user asked for it (the startup and
+        post-update-dialog checks stay silent, keeping the indicator actionable-news-only)."""
+        self._check_manual = True
+        self.lbl_update_avail.setText("checking for updates…")
+        self.lbl_update_avail.show()
+        self.check_updates()                    # a no-op start when one is already running (its result still counts)
+
     def check_updates(self):
         """Compare local HEAD against origin's for both repos (read-only, off-thread); the result
-        drives lbl_update_avail. Started once from MainWindow.start() and re-run after any UpdateDialog
-        finishes — no periodic re-check."""
+        drives lbl_update_avail. Started once from MainWindow.start(), re-run after any UpdateDialog
+        finishes and on demand via [Check for updates…] — no periodic re-check."""
         if getattr(self, "_update_job", None) is not None and self._update_job.isRunning():
             return                                  # one check at a time (a stale result would race it)
         job = UpdateCheckJob(self)
@@ -611,6 +654,8 @@ class ConfigTab(QWidget):
 
     def _on_update_check(self, results):
         daemon_avail, gui_avail = results
+        manual = self._check_manual               # set by [Check for updates…]; the other callers stay silent
+        self._check_manual = False
         if daemon_avail and gui_avail:
             text = "Update to DAEMON and GUI available"
         elif daemon_avail:
@@ -619,6 +664,11 @@ class ConfigTab(QWidget):
             text = "Update to GUI available"
         else:                                       # neither has an update, or the check was unknown (offline / non-git)
             self.lbl_update_avail.hide()
+            if manual:                              # a user-initiated check still gets a completion note
+                if daemon_avail is False or gui_avail is False:
+                    self._banner("checked — no updates available", "info")
+                else:
+                    self._banner("update check inconclusive (offline or not a git checkout?)", "info")
             return
         self.lbl_update_avail.setText(text)
         self.lbl_update_avail.show()

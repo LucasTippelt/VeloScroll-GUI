@@ -1,5 +1,14 @@
 # Planned Features
 
+- polishing GUI layout and feel
+
+# v1.3.4
+
+**GUI-only changes, parity with Daemon v1.3.X**.
+- **Update dialog commit links** — the update dialog's "current commit:" line is now a clickable link to the GitHub commit page (refreshed to the new HEAD after a successful pull), and after an update it shows linked prev → new hashes plus a compare link for multi-commit pulls; the rollback command's previous hash is linked too. The URL base is read from each repo's own `remote.origin.url`, so non-GitHub remotes (other hosts, local paths) degrade to today's plain text with no broken links.
+- **Live TICK description** — the TICK row's hint now shows the Hz figure and period computed from the actually active tickrate on every refresh ("ticker period in seconds (~125 Hz at 0.008)") instead of the fixed "~250 Hz at 0.004" example; unapplied edits don't change it until applied, matching the Effective column's semantics.
+- **Check for updates button** — new [Check for updates…] below the two update buttons on the Daemon group re-runs the read-only local-vs-origin comparison on demand (it previously only ran at startup and after an update dialog): the indicator row shows "checking for updates…" while it runs, an available update appears in the existing amber note, and a clean check flashes a status-bar confirmation ("no updates available", or an inconclusive note when offline / non-git) instead of silently hiding.
+
 # v1.3.3
 
 **GUI-only changes, parity with Daemon v1.3.X**.

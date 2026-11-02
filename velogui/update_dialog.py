@@ -8,7 +8,9 @@ the running instance spawns a fresh one and quits itself). The transcript pane s
 a run that pulled new code the previous commit hash is offered as a one-line rollback command. A clean
 repo ends in an "already up to date" no-op — nothing is restarted."""
 
+import html
 import os
+import re
 import subprocess
 import sys
 
@@ -36,6 +38,33 @@ def _git_head(repo_dir):
     return (short, subject) if short else None
 
 
+def _repo_web_base(repo_dir):
+    """Web base (https://github.com/<owner>/<repo>) for commit/compare links, read from the repo's own
+    remote.origin.url; None when it is not a GitHub checkout (no origin / other host -> plain text)."""
+    try:
+        p = subprocess.run(["git", "-C", repo_dir, "config", "--get", "remote.origin.url"],
+                           capture_output=True, text=True, timeout=5)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    if p.returncode != 0:
+        return None
+    url = (p.stdout or "").strip()
+    path = None
+    for prefix in ("https://github.com/", "git@github.com:", "ssh://git@github.com/"):
+        if url.startswith(prefix):
+            path = url[len(prefix):]
+            break
+    if path is None:
+        return None
+    path = path.rstrip("/")
+    if path.endswith(".git"):
+        path = path[:-len(".git")]
+    parts = path.split("/")
+    if len(parts) != 2 or not all(parts):
+        return None
+    return f"https://github.com/{parts[0]}/{parts[1]}"
+
+
 def _parse_markers(text):
     """(previous_commit|None, result_text|None) from the transcript's marker lines."""
     prev = result = None
@@ -58,28 +87,18 @@ class UpdateDialog(QDialog):
         self._target = target
         gui = target == "gui"
         repo_dir = GUI_DIR if gui else DAEMON_DIR
+        # static for the dialog's lifetime; None (non-GitHub remote / no origin) -> plain text everywhere
+        self._web_base = _repo_web_base(repo_dir)
 
         self.setWindowTitle("Update VeloScroll GUI" if gui else "Update VeloScroll daemon")
         self.setMinimumSize(680, 440)
         self._job = None
 
         root = QVBoxLayout(self)
-        head = _git_head(repo_dir)
-        cur = (f"current commit: {head[0]} — {head[1]}" if head
-               else f"current commit: unknown (is {repo_dir} a git checkout?)")
-        if gui:
-            info_text = ("Updates the GUI only (/opt/veloscroll-gui):\n\n" + cur + "\n\n"
-                         "`git pull --ff-only`. The GUI is not a service — after a successful pull that "
-                         "changes code, VeloScroll GUI closes & reopens itself automatically. Your config.ini "
-                         "lives outside the repo and is untouched.")
-        else:
-            info_text = ("Updates the daemon only (/opt/veloscroll), per docs/UPDATING.md:\n\n" + cur + "\n\n"
-                         "`git pull --ff-only`, refreshes veloscroll.service + daemon-reload when the release "
-                         "changed it, restarts the service and tails the journal. Your config.ini lives outside "
-                         "the repo and is untouched.")
-        info = QLabel(info_text)
-        info.setWordWrap(True)
-        root.addWidget(info)
+        self.info = QLabel("")
+        self.info.setWordWrap(True)
+        self._set_info()
+        root.addWidget(self.info)
 
         row = QHBoxLayout()
         self.btn_run = QPushButton("Update GUI…" if gui else "Update daemon…")
@@ -96,11 +115,48 @@ class UpdateDialog(QDialog):
         self.txt_log.setPlaceholderText("transcript (empty until an update runs)")
         root.addWidget(self.txt_log, 1)
 
+        # post-update line: linked prev → new hashes (+ compare for multi-commit pulls); hidden until a real pull
+        self.lbl_updated = QLabel("")
+        self.lbl_updated.setWordWrap(True)
+        self.lbl_updated.setTextFormat(Qt.RichText)
+        self.lbl_updated.setOpenExternalLinks(True)
+        self.lbl_updated.hide()
+        root.addWidget(self.lbl_updated)
+
         self.lbl_rollback = QLabel("")
         self.lbl_rollback.setWordWrap(True)
         self.lbl_rollback.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self.lbl_rollback.hide()
         root.addWidget(self.lbl_rollback)
+
+    def _set_info(self):
+        """(Re)render the top info label for the current HEAD: rich text with a clickable commit link when
+        both the web base and a HEAD are known, else exactly today's plain text (no link)."""
+        gui = self._target == "gui"
+        repo_dir = GUI_DIR if gui else DAEMON_DIR
+        head = _git_head(repo_dir)
+        base = self._web_base
+        if head and base:
+            cur = (f'current commit: <a href="{base}/commit/{head[0]}">{head[0]}</a> — '
+                   f'{html.escape(head[1]).replace(chr(10), "<br>")}')   # the subject may carry HTML characters
+        else:
+            cur = (f"current commit: {head[0]} — {head[1]}" if head
+                   else f"current commit: unknown (is {repo_dir} a git checkout?)")
+        body = ("Updates the GUI only (/opt/veloscroll-gui):\n\n" + cur + "\n\n"
+                "`git pull --ff-only`. The GUI is not a service — after a successful pull that "
+                "changes code, VeloScroll GUI closes & reopens itself automatically. Your config.ini "
+                "lives outside the repo and is untouched.") if gui else (
+            "Updates the daemon only (/opt/veloscroll), per docs/UPDATING.md:\n\n" + cur + "\n\n"
+            "`git pull --ff-only`, refreshes veloscroll.service + daemon-reload when the release "
+            "changed it, restarts the service and tails the journal. Your config.ini lives outside "
+            "the repo and is untouched.")
+        if head and base:
+            self.info.setTextFormat(Qt.RichText)      # \n collapses in rich text — convert to <br>
+            self.info.setOpenExternalLinks(True)
+            self.info.setText(body.replace("\n", "<br>"))
+        else:
+            self.info.setTextFormat(Qt.PlainText)
+            self.info.setText(body)
 
     def _on_update(self):
         if self._job is not None and self._job.isRunning():
@@ -139,10 +195,42 @@ class UpdateDialog(QDialog):
             return
         repo_dir = GUI_DIR if self._target == "gui" else DAEMON_DIR
         restart = "" if self._target == "gui" else " && sudo systemctl restart veloscroll"
-        self.lbl_rollback.setText(
-            f"If something breaks, roll back to the previous commit:\n"
-            f"sudo git -C {repo_dir} checkout {prev}{restart}")
+        base = self._web_base
+        if base:
+            # rich text with a clickable previous hash; the command stays selectable (TextSelectableByMouse)
+            self.lbl_rollback.setTextFormat(Qt.RichText)
+            self.lbl_rollback.setOpenExternalLinks(True)
+            self.lbl_rollback.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.LinksAccessibleByMouse)
+            self.lbl_rollback.setText(
+                f"If something breaks, roll back to the previous commit:<br>"
+                f"sudo git -C {repo_dir} checkout <a href=\"{base}/commit/{prev}\">{prev}</a>{restart}")
+        else:                                           # non-GitHub remote — today's plain text
+            self.lbl_rollback.setTextFormat(Qt.PlainText)
+            self.lbl_rollback.setText(
+                f"If something breaks, roll back to the previous commit:\n"
+                f"sudo git -C {repo_dir} checkout {prev}{restart}")
         self.lbl_rollback.show()
+
+    def _show_updated(self, prev, out):
+        """Post-update line: linked prev → new hashes plus a compare link for multi-commit pulls; plain
+        text (no links) when the web base is unknown. `out` is the transcript carrying priv.py's
+        `updated <prev9> → <new9> (N new commit(s))` line."""
+        if not prev or len(prev) < 7:
+            return
+        head = _git_head(GUI_DIR if self._target == "gui" else DAEMON_DIR)
+        if head is None:
+            return
+        new = head[0]
+        m = re.search(r"updated [0-9a-f]+ → [0-9a-f]+ \((\d+) new commit\(s\)\)", out or "")
+        n = int(m.group(1)) if m else None
+        base = self._web_base
+        prev_txt = f'<a href="{base}/commit/{prev}">{prev[:9]}</a>' if base else prev[:9]
+        new_txt = f'<a href="{base}/commit/{new}">{new}</a>' if base else new
+        text = f"Updated {prev_txt} → {new_txt}"
+        if n is not None and n >= 2:                    # compare only for multi-commit pulls, with a known base
+            text += f' · <a href="{base}/compare/{prev}...{new}">compare</a>'
+        self.lbl_updated.setText(text)
+        self.lbl_updated.show()
 
     def _finish(self, job, out):
         if job is not self._job:
@@ -161,6 +249,10 @@ class UpdateDialog(QDialog):
             self._set_result_label(True, result or "update finished")
         if not noop:
             self._show_rollback(prev)
+            self._show_updated(prev, out)
+            self._set_info()      # the top line must point at the new HEAD (the dialog stays open for daemon targets)
+        else:
+            self.lbl_updated.hide()   # a no-op leaves any earlier post-update line stale — clear it
 
     def _relaunch_and_quit(self):
         """Spawn a fresh GUI instance in its own session (it survives this process exiting), then quit.
@@ -188,4 +280,5 @@ class UpdateDialog(QDialog):
         self.txt_log.setPlainText(text + hint)
         prev, result = _parse_markers(text)
         self._set_result_label(False, result or "update failed — see transcript")
+        self.lbl_updated.hide()   # a failed run supersedes any earlier post-update line
         self._show_rollback(prev)
