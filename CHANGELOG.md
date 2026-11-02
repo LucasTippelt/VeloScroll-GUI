@@ -1,9 +1,5 @@
 # Planned Features
 
-- **Feature/Convience**: On gui startup, check git and make update field say "Update to GUI/DAEMON available"
-- **Security**: make `/opt/veloscroll-gui/helpers/priv.py` root-owned -> closing possible privilege escalation vector
-- **Documentation** Sudoers Example: Username fix
-
 # v1.3.3
 
 **GUI-only changes, parity with Daemon v1.3.X**.
