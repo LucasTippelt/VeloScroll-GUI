@@ -31,9 +31,25 @@ SECTIONS = (
 # GUI-owned keys: the GUI persists them in [veloscroll] of config.ini, but they are not daemon keys —
 # the daemon logs an unknown-key warning and ignores them (priv.py's apply-config does too). Their
 # effective value is whatever config.ini says; no state-file/computed dataset ever carries them.
-GUI_KEYS = ("STARTUP_TAB",)
+GUI_KEYS = ("STARTUP_TAB", "TRAY_LED")
 
 ALL_KEYS = tuple(k for _, keys in SECTIONS for k in keys) + GUI_KEYS
+
+# built-in defaults of the GUI-owned boolean keys (applied when the key is absent from config.ini).
+GUI_BOOL_DEFAULTS = {"TRAY_LED": True}
+
+
+def gui_bool(raw, default):
+    """Parse a GUI-owned boolean raw ("True"/"False" as written by the checkbox editor);
+    absent or unrecognized text falls back to `default`."""
+    if isinstance(raw, bool):
+        return raw
+    r = (raw or "").strip().lower()
+    if r in ("1", "true", "yes", "on"):
+        return True
+    if r in ("0", "false", "no", "off"):
+        return False
+    return default
 
 DS_STATE = "state file"
 DS_COMPUTED = "computed (in-process)"

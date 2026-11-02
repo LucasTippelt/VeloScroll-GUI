@@ -1,4 +1,4 @@
-"""Ramp curve previews (chunk 3): vertical and horizontal notches/s vs distance.
+"""Ramp curve previews: vertical and horizontal notches/s vs distance.
 
 Plots the daemon's exact target-rate formula from veloscroll.py's ticker:
 

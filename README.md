@@ -116,7 +116,7 @@ install needs — device and button selection happen in the GUI after first laun
 /opt/veloscroll-gui/run.sh
 ```
 
-or the "VeloScroll GUI" desktop entry. No custom icon in v1.3.0 yet.
+or the "VeloScroll GUI" desktop entry.
 
 Everything after setup — each tab, the permissions checks, and all daemon config keys — is documented in
 [USAGE.md](USAGE.md).

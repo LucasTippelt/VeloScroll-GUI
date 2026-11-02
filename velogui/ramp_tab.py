@@ -1,4 +1,4 @@
-"""Ramp tab (split out of chunk 3's old Preview tab): the ramp options + their live curves.
+"""Ramp tab: the ramp options + their live curves.
 
 The option fields are the very _FieldRow editors ConfigTab creates for all 30 keys — this tab only
 places its share (RAMP_KEYS) in section tables next to the curves, so there is exactly one editor per

@@ -1,4 +1,4 @@
-"""Presets tab (chunk 5): save the current config under a name; load key groups from saved presets.
+"""Presets tab: save the current config under a name; load key groups from saved presets.
 
 All writes go through `priv.py preset ...` — the strict allowlist passthrough to veloscroll_preset.py
 (same grammar, re-validated there). The preset list is parsed in-process (the files are world-readable);

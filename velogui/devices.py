@@ -1,4 +1,4 @@
-"""Device picker (chunk 3): choose the daemon's target mouse, write DEVICE_MATCH into the edit buffer.
+"""Device picker: choose the daemon's target mouse, write DEVICE_MATCH into the edit buffer.
 
 Enumeration is in-process first (`evdev.list_devices()` + open each node — works for a user in the
 input group); any unreadable node (permission denied / vanished) triggers the root fallback

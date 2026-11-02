@@ -6,7 +6,7 @@ Checks (per plan):
  3. config.ini  — /etc/veloscroll/config.ini exists
  4. unit        — unit file present AND `systemctl is-enabled veloscroll` == enabled
 
-Chunk 1 runs all checks synchronously on [Re-check] (the ping call fails fast via -n).
+All checks run synchronously on [Re-check] (the ping call fails fast via -n).
 """
 import getpass
 import os
@@ -183,7 +183,7 @@ class _CheckRow(QWidget):
 class PermissionsPanel(QGroupBox):
     """The four checks as rows (OK/gap + fix command), rerunnable via [Re-check]."""
 
-    checked = Signal()   # emitted after a full re-run (sync in chunk 1)
+    checked = Signal()   # emitted after a full re-run (synchronous)
 
     def __init__(self, parent=None):
         super().__init__("Permissions", parent)

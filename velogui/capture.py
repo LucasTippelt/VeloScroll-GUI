@@ -1,4 +1,4 @@
-"""Button capture (chunk 4): pick SCROLL_BTN / SCROLL_BTN_H / DISABLED_BTN by pressing them.
+"""Button capture: pick SCROLL_BTN / SCROLL_BTN_H / DISABLED_BTN by pressing them.
 
 Primary mode listens on the daemon's virtual output node (`veloscroll-mouse`): the daemon
 forwards every unconsumed event there verbatim, so any button that is NOT currently one of

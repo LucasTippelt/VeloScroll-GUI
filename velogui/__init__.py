@@ -2,7 +2,7 @@
 import os
 
 APP_NAME = "VeloScroll"
-VERSION = "1.3.0"   #initial release, 1.3.0 to match daemon version, always update both together
+VERSION = "1.3.2"   #initial release was 1.3.0 to match daemon version, 1.3.X releases on both sides are compatible
 
 DAEMON_DIR = "/opt/veloscroll"
 CONFIG_PATH = "/etc/veloscroll/config.ini"

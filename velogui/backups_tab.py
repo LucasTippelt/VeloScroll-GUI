@@ -1,4 +1,4 @@
-"""Backups tab (chunk 5): browse the .bak-<timestamp> backups of config.ini and presets; restore one.
+"""Backups tab: browse the .bak-<timestamp> backups of config.ini and presets; restore one.
 
 The daemon's save/load commands back up the file they overwrite (pruned per MAX_BACKUPS); this tab
 lists every well-formed backup in /etc/veloscroll/ and its presets/ subdir, parsed in-process (the

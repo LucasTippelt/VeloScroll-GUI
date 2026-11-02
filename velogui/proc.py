@@ -15,18 +15,19 @@ TIMEOUT_S = 30
 
 
 class PrivJob(QThread):
-    """Run an allowlisted privileged command off the GUI thread (chunks 2+)."""
+    """Run an allowlisted privileged command off the GUI thread."""
 
     finished_ok = Signal(str)      # priv.py stdout on success
     failed = Signal(str, str)      # (PrivError.kind, detail incl. captured stderr)
 
-    def __init__(self, args, parent=None):
+    def __init__(self, args, parent=None, timeout=TIMEOUT_S):
         super().__init__(parent)
         self._args = [str(a) for a in args]
+        self._timeout = timeout
 
     def run(self):
         try:
-            out = run_priv(self._args)
+            out = run_priv(self._args, timeout=self._timeout)
         except PrivError as e:
             detail = (e.stderr or str(e)).strip()
             self.failed.emit(e.kind, detail)

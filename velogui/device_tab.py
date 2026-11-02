@@ -1,10 +1,10 @@
-"""Device Picker tab (chunk 3) + the device & button fields moved here from Status/Config.
+"""Device Picker tab + the device & button fields moved here from Status/Config.
 
 The fields on the left are the very _FieldRow editors ConfigTab creates for DEVICE_KEYS — one editor
 per key in the whole window, exactly like the Ramp tab does with RAMP_KEYS: every edit lands in the
 shared edit buffer as if typed anywhere else. They live in a section table with the same layout as the
 Status & Config page's main table (Key | Effective value | Edit | Description, uniform 34 px rows). The
-three button rows carry their chunk-4 [Capture…] buttons in-cell (press the physical button, click its
+three button rows carry their [Capture…] buttons in-cell (press the physical button, click its
 code in the dialog). Selecting a device on the right writes DEVICE_MATCH immediately; Apply/Cancel below
 commit or discard everything on this page like any other tab (all bars are driven by the ConfigTab,
 which owns the buffer)."""

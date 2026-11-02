@@ -1,4 +1,4 @@
-"""Edit buffer for the Config tab (chunk 2).
+"""Edit buffer for the Config tab.
 
 Holds the config.ini text in memory plus per-key edit state, and renders a new full
 text line-preservingly over the baseline:
@@ -22,7 +22,8 @@ import re
 from PySide6.QtCore import QObject, Signal
 
 from . import CONFIG_PATH, DAEMON_DIR
-from .values import ALL_KEYS, GUI_KEYS, _daemon_module, daemon_module_error
+from .values import (ALL_KEYS, GUI_BOOL_DEFAULTS, GUI_KEYS, gui_bool, _daemon_module,
+                     daemon_module_error)
 
 # key -> widget kind (drives which editor the Config tab builds)
 KIND_BOOL = "bool"        # INVERT LATENCY_LOG TOGGLE_SCROLL VERTICAL_H LEFT_CLICK_RESET STATE_FILE DISTANCE_FILE
@@ -34,6 +35,8 @@ KIND_BTN = "btn"          # SCROLL_BTN / DISABLED_BTN / SCROLL_BTN_H — evdev n
 KIND_NAME = "name"        # NAME_MATCH — free text; empty falls back to the built-in default
 KIND_DEVICE = "device"    # DEVICE_MATCH — vendor/product pair, stable path string, or none
 KIND_TAB = "tab"          # STARTUP_TAB — GUI-owned: one of the tab labels (the daemon ignores this key)
+# TRAY_LED is a GUI-owned KIND_BOOL key: a checkbox row like every other bool,
+# but _recompute_one parses it with gui_bool() instead of the daemon's parser (unknown to it).
 
 KEY_KINDS = {
     "DPI": KIND_FLOAT, "DEADZONE_IN": KIND_FLOAT, "FULL_IN": KIND_FLOAT,
@@ -47,6 +50,7 @@ KEY_KINDS = {
     "NAME_MATCH": KIND_NAME, "DEVICE_MATCH": KIND_DEVICE,
     "SCROLL_BTN": KIND_BTN, "DISABLED_BTN": KIND_BTN, "SCROLL_BTN_H": KIND_BTN,
     "STARTUP_TAB": KIND_TAB,
+    "TRAY_LED": KIND_BOOL,
 }
 
 # keys whose parsed value may be None (unset / feature off)
@@ -60,7 +64,7 @@ RAMP_KEYS = ("DEADZONE_IN", "FULL_IN", "MIN_RATE", "MAX_RATE", "CURVE", "OUT_SMO
              "DEADZONE_IN_H", "FULL_IN_H", "MIN_RATE_H", "MAX_RATE_H", "CURVE_H", "OUT_SMOOTH_H")
 
 # the device, DPI & button fields — edited on the Device Picker tab next to the mouse selector and the
-# chunk-4 [Capture…] buttons instead of in the Status & Config table (DPI is a property of the picked mouse).
+# [Capture…] buttons instead of in the Status & Config table (DPI is a property of the picked mouse).
 # The three button keys come last, in their display order: SCROLL_BTN / SCROLL_BTN_H / DISABLED_BTN
 DEVICE_KEYS = ("NAME_MATCH", "DEVICE_MATCH", "DPI", "SCROLL_BTN", "SCROLL_BTN_H", "DISABLED_BTN")
 
@@ -175,8 +179,11 @@ class ConfigModel(QObject):
         self.changed.emit()
 
     def _recompute_one(self, key):
-        if key in GUI_KEYS:      # GUI-owned (the daemon ignores it) — no daemon parser to run; the raw text is the value
-            self.values[key] = self.raws.get(key) or None
+        if key in GUI_KEYS:      # GUI-owned (the daemon ignores it) — no daemon parser to run
+            if KEY_KINDS.get(key) == KIND_BOOL:   # TRAY_LED: a real bool for the checkbox editor + its live consumer
+                self.values[key] = gui_bool(self.raws.get(key), GUI_BOOL_DEFAULTS[key])
+            else:                            # STARTUP_TAB: the raw text is the value (a tab label)
+                self.values[key] = self.raws.get(key) or None
             return
         mod = self._mod
         if not mod:

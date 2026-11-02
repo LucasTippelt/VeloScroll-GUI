@@ -16,7 +16,7 @@ row in this page's table; the daemon ignores the key itself.
 
 - Typed widgets per key kind (checkboxes, spin boxes, text fields accepting the
   daemon's own syntax: evdev name or decimal for buttons, pair/path/none for DEVICE_MATCH).
-- The three button keys carry a [Capture…] button opening chunk 4's capture dialog
+- The three button keys carry a [Capture…] button opening the press-and-pick capture dialog
   (press the physical button, click its code in the list; [Save] writes it into this buffer and
   [Apply] commits config.ini with it included — Close discards an unsaved selection).
 - Nullable *_H / button / device fields show their effective fallback when unset;
@@ -46,6 +46,7 @@ from .config_model import FALLBACK, GUI_KEYS, KEY_KINDS, NULLABLE, RAMP_KEYS, _r
 from .errors import popup_error
 from .permissions_panel import PermissionsPanel, SUDOERS_FIX
 from .proc import PrivError, PrivJob, run_priv
+from .update_dialog import UpdateDialog
 
 _SERVICE_COLORS = {"active": "#16a34a", "failed": "#dc2626"}
 
@@ -82,12 +83,13 @@ TITLES = {
     "STATE_FILE": ("STATE_FILE", "write /run/veloscroll/state for GUIs (GUI switch)"),
     "DISTANCE_FILE": ("DISTANCE_FILE", "write /run/veloscroll/distance live feed for the curve markers (GUI switch)"),
     "STARTUP_TAB": ("STARTUP_TAB", "tab opened on startup — GUI only, the daemon ignores this key"),
+    "TRAY_LED": ("TRAY_LED", "status-LED tray icon: green while a scroll session is active, gray when idle — GUI only (applies live; the daemon ignores this key)"),
 }
 
 SECTIONS = (   # display order per plan, minus SCROLL_INVERT_KEYS (Scroll/Invert tab), RAMP_KEYS (Ramp tab),
               # DEVICE_KEYS (Device Picker tab) and the GUI-owned lifecycle keys STATE_FILE / DISTANCE_FILE
               # (no selector rows — forced on while open, off at exit): gui / logging / misc
-    ("GUI", ("STARTUP_TAB",)),
+    ("GUI", ("STARTUP_TAB", "TRAY_LED")),
     ("Logging", ("LOG_LEVEL", "LATENCY_LOG")),
     ("Misc", ("MAX_BACKUPS",)),
 )
@@ -129,7 +131,7 @@ class _FieldRow(QWidget):
 
     ConfigTab places `container` in the Edit column and `hint` in the Description column;
     this object owns both so get_raw()/set_display()/set_state() keep working unchanged.
-    For button keys, `container` wraps the editor plus a [Capture…] button (chunk 4) that
+    For button keys, `container` wraps the editor plus a [Capture…] button that
     opens the press-and-pick capture dialog; for every other key it is just the editor.
     get_raw() returns the exact text that would be written for the key ("" = unset);
     set_display(value) initializes the editor from a parsed effective value."""
@@ -182,7 +184,7 @@ class _FieldRow(QWidget):
             self.editor.setPlaceholderText(ph)
             self.editor.textEdited.connect(lambda _t: self.changed.emit())
 
-        # button keys get the chunk-4 press-and-pick capture button next to their editor; every other
+        # button keys get the press-and-pick capture button next to their editor; every other
         # key's container is just the editor. `container` and `hint` become children of a tab's cell /
         # grid (reparented by setCellWidget / addWidget); this row object keeps them together so
         # get_raw()/set_display()/set_state() keep working unchanged no matter which tab hosts the row.
@@ -307,6 +309,27 @@ class ConfigTab(QWidget):
         reload_col.addWidget(self.lbl_reload)
         grid.addLayout(dev_col, 1)
         grid.addLayout(reload_col, 1)
+        # the two one-click updates stacked (daemon first, GUI directly below it), vertically centered in their cell —
+        # a wrapper widget because QBoxLayout.addLayout() takes no alignment argument
+        update_wrap = QWidget()
+        update_col = QVBoxLayout(update_wrap)
+        update_col.setContentsMargins(0, 0, 0, 0)
+        update_col.addStretch(1)
+        btn_update = QPushButton("Update daemon…")     # one-click update per docs/UPDATING.md
+        btn_update.setToolTip(
+            "Pull the latest daemon code from git and restart the service (docs/UPDATING.md). "
+            "The dialog shows a transcript of every step plus a rollback command for the previous commit.")
+        btn_update.clicked.connect(self._open_update_dialog)
+        update_col.addWidget(btn_update)
+        btn_update_gui = QPushButton("Update GUI…")
+        btn_update_gui.setToolTip(
+            "Pull the latest GUI code from git (git pull --ff-only in /opt/veloscroll-gui). The GUI is not a "
+            "service — after a successful pull that changes code, it closes & reopens itself automatically. "
+            "The dialog shows a transcript of every step plus a rollback command for the previous commit.")
+        btn_update_gui.clicked.connect(self._open_gui_update_dialog)
+        update_col.addWidget(btn_update_gui)
+        update_col.addStretch(1)
+        grid.addWidget(update_wrap, 0, Qt.AlignVCenter)
         root.addWidget(dg)
 
         # -- unified values table: Key | Effective value | Edit | Description --------
@@ -317,7 +340,7 @@ class ConfigTab(QWidget):
         # one row object per key — the Scroll/Invert tab takes its share (SCROLL_INVERT_KEYS), the Ramp
         # tab its RAMP_KEYS and the Device Picker tab its DEVICE_KEYS out of this table at construction
         # time; only SECTIONS' keys stay here
-        self._capture_dialogs = {}          # key -> open CaptureDialog (chunk 4), one per button key
+        self._capture_dialogs = {}          # key -> open CaptureDialog, one per button key
         for key in vmod.ALL_KEYS:
             row = _FieldRow(key, KEY_KINDS[key])
             row.changed.connect(lambda k=key: self._on_row_changed(k))
@@ -345,7 +368,7 @@ class ConfigTab(QWidget):
         self._load_from_disk()
         self.watcher.state_changed.connect(self._on_state)
 
-        app = QApplication.instance()       # chunk 4: a quit must never leave the daemon stopped by a capture dialog
+        app = QApplication.instance()       # a quit must never leave the daemon stopped by a capture dialog
         if app is not None:
             app.aboutToQuit.connect(self._on_app_quit)
 
@@ -528,7 +551,7 @@ class ConfigTab(QWidget):
         self._refresh_validation()
 
     def set_key_raw(self, key, raw):
-        """External writer (chunk 3 device picker / chunk 4 button capture): apply a raw value to the
+        """External writer (device picker / button capture): apply a raw value to the
         edit buffer and sync this page's row editor + validation, as if the user had typed it."""
         self.model.set_raw(key, raw)
         row = self.rows.get(key)
@@ -538,7 +561,7 @@ class ConfigTab(QWidget):
             row.set_display(self.model.values.get(key), raw=raw)
         self._refresh_validation()
 
-    # -- chunk 4: button capture ------------------------------------------------------
+    # -- button capture ------------------------------------------------------------------
 
     def _open_capture(self, key):
         """[Capture…] on a button row: one live dialog per key at a time (non-modal — Apply stays reachable)."""
@@ -556,6 +579,16 @@ class ConfigTab(QWidget):
         dlg = self._capture_dialogs.pop(key, None)
         if dlg is not None:
             dlg.deleteLater()
+
+    # -- one-click updates (daemon + GUI) -------------------------------------------
+
+    def _open_update_dialog(self):
+        """[Update daemon…] on the Daemon group: modal dialog with confirm + transcript (update_dialog.py)."""
+        UpdateDialog(self.window(), target="daemon").exec()
+
+    def _open_gui_update_dialog(self):
+        """[Update GUI…] directly below [Update daemon…]: same dialog for the /opt/veloscroll-gui checkout."""
+        UpdateDialog(self.window(), target="gui").exec()
 
     def _on_app_quit(self):
         """Quit must never leave the daemon down because a capture dialog stopped it."""

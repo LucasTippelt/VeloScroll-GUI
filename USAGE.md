@@ -10,8 +10,19 @@ The first page merges daemon status with config editing; top to bottom: the Daem
 table, this page's Apply/Cancel bar, and the [Permissions panel](#permissions-panel).
 
 - **Daemon group** — service state (green = active, red = failed), the devices the daemon currently has
-  grabbed, and config reload health (`reload OK` / `reload rejected: …` / `pending reload (~2 s)` when
-  `config.ini` is newer than the last state-file update).
+  grabbed, config reload health (`reload OK` / `reload rejected: …` / `pending reload (~2 s)` when
+  `config.ini` is newer than the last state-file update), and **[Update daemon…]**: a one-click update of
+  the daemon only (per [docs/UPDATING.md](https://github.com/LucasTippelt/VeloScroll/blob/main/docs/UPDATING.md)) —
+  after confirmation it runs `priv.py update` as root: `git pull --ff-only` in `/opt/veloscroll`, a service-file
+  refresh + daemon-reload when the release changed `veloscroll.service`, then a restart and a journal tail. The
+  dialog shows a transcript of every step; on a clean repo it ends in an "already up to date" no-op (nothing is
+  restarted), and after a real update it offers the previous commit as a one-line rollback command. Directly
+  below it, **[Update GUI…]** updates the GUI only — after confirmation it runs `priv.py update-gui` as root:
+  `git pull --ff-only` in `/opt/veloscroll-gui`. The GUI is not a service, so there is nothing to restart via
+  systemd; instead, after a successful pull that changes code, the running instance closes & reopens itself
+  automatically (an "already up to date" no-op leaves it untouched). It shows the same transcript and offers
+  the previous commit as a one-line rollback command. Your `config.ini` lives outside both repos and is
+  untouched either way.
 - **Values table** — one row per key with four columns: Key | Effective value (live from the state file;
   a red `—` means the daemon source could not be loaded) | Edit (typed widget) | Description. The feel &
   scroll-mode keys are edited on the [Scroll/Invert tab](#scrollinvert), the ramp keys on the
@@ -24,6 +35,11 @@ table, this page's Apply/Cancel bar, and the [Permissions panel](#permissions-pa
   an unset or unknown value falls back to the first one (Status & Config). Its Effective value column
   shows what `config.ini` says, since no state-file/computed dataset ever carries it. Press Apply to make
   a change stick — it takes effect from the next start.
+- **Tray LED (`TRAY_LED`, GUI section)** — one more GUI-only key (the daemon ignores it) that shows/hides
+  the status-LED tray icon. Unlike `STARTUP_TAB` it applies **live** — flipping the checkbox takes effect
+  immediately without Apply (it is a chrome switch with no daemon round-trip), and Cancel reverts it like
+  any other unapplied edit. Press Apply to make a change stick across restarts; an unset key means on. See
+  [Tray icon](#tray-icon).
 - **Apply / Cancel** (every tab page carries its own bar over the same buffer) — Apply validates inline
   against the daemon's own checks, writes `/etc/veloscroll/config.ini` through the scoped sudoers rule
   (`priv.py apply-config`), then confirms the reload from the state file (~2 s) or, without one, from the
@@ -62,10 +78,10 @@ next to the mouse it belongs to.)
 - **Live position markers** — while a scroll session runs (button held or toggled on), that same orange
   marker tracks the daemon's live position from `/run/veloscroll/distance`, polled at the daemon's
   ticker rate (`TICK`, ~250 Hz by default), and shows `(live)`;
-  on release it returns to where you last placed it by hand. The "live position markers (DISTANCE_FILE)"
-  checkbox (checked by default) decides whether the GUI forces `DISTANCE_FILE = True` at startup —
-  unchecking applies from the next start, and the key is always forced off again when the GUI closes
-  ([GUI-managed lifecycle keys](README.md#gui-managed-lifecycle-keys-state_file-distance_file)).
+   on release it returns to where you last placed it by hand. The "live position markers (DISTANCE_FILE)"
+    checkbox (checked by default) decides whether the GUI forces `DISTANCE_FILE = True` at startup — unchecking
+    applies from the next start, and the key is always forced off again when the GUI closes
+   ([GUI-managed lifecycle keys](README.md#gui-managed-lifecycle-keys-state_file-distance_file)).
 - Plot titles follow the scroll-mode keys: "held" vs "toggled" per `TOGGLE_SCROLL(_H)`, and
   `VERTICAL_H = true` renames the second graph to "second vertical ramp". A note under the vertical plot
   lists every `_H` key that is currently falling back to its vertical value.
@@ -155,6 +171,14 @@ first.
   daemon hot-reload it within ~2 s. Every restore backs up the current state first, so undoing is itself
   reversible (while `MAX_BACKUPS != 0`).
 
+## Tray icon
+
+- **Tray icon** (`TRAY_LED`, on by default) — a small dot in your system tray: green while a scroll session
+  is active (the daemon's `active` flag from the state file, re-read at 4 Hz), gray when idle. A single left
+  click toggles the main window (shows/raises it, or hides it). Turn it off with the `TRAY_LED` checkbox on
+  the Status & Config page (GUI section) — it applies live and sticks after Apply. If the session has no
+  system tray the icon simply isn't created — nothing else depends on it.
+
 ## Permissions panel
 
 The page's Permissions group (below the values table) checks, with a copy-paste fix for each gap (and [Re-check]):
@@ -237,4 +261,4 @@ Used only while `SCROLL_BTN_H` is held; unset or `none` falls back to the vertic
 |-----|-----------------|-------------|
 | `MAX_BACKUPS` | How many `.bak-<timestamp>` backups the preset helper and seed script keep per file family. `-1` = unlimited, `N ≥ 1` = keep only the newest N after each run that writes a backup, `0` = backups disabled entirely (existing ones stay untouched). | Hot-reloaded like every other key — each helper run reads the current value. Set `0` if you don't want any `.bak-*` files at all. |
 | `STATE_FILE` | `True`/`False`. When true, the daemon writes `/run/veloscroll/state`: a JSON snapshot of all effective values, the grabbed devices and scroll activity (plus reload health) for GUI frontends to read. Off by default — zero overhead when no GUI runs. | Per-machine operational state like `MAX_BACKUPS` — never part of presets; managed by the GUI itself (forced on while it is open, off at exit — no selector row). The shipped unit creates `/run/veloscroll` (`RuntimeDirectory=veloscroll`). See [GUI-managed lifecycle keys in the README](README.md#gui-managed-lifecycle-keys-state_file-distance_file). |
-| `DISTANCE_FILE` | `True`/`False`. When true, the daemon writes a second file, `/run/veloscroll/distance`: the live per-axis distances (vertical + horizontal) and smoothed rate of the active scroll session, rewritten on every ticker tick while a button is held (~250 Hz). This is what drives the Ramp tab's live curve markers — with it off they only follow your mouse. Off by default — zero overhead without a consumer. | Per-machine operational state like `STATE_FILE` — never part of presets; managed by the GUI itself (forced on while open unless opted out via the Ramp tab checkbox, always off at exit — no selector row). The same unit creates `/run/veloscroll` for this file too. See [GUI-managed lifecycle keys in the README](README.md#gui-managed-lifecycle-keys-state_file-distance_file). |
+| `DISTANCE_FILE` | `True`/`False`. When true, the daemon writes a second file, `/run/veloscroll/distance`: the live per-axis distances (vertical + horizontal) and smoothed rate of the active scroll session, rewritten on every ticker tick while a button is held (~250 Hz). This is what drives the Ramp tab's live curve markers — with it off they only follow your mouse. Off by default — zero overhead without a consumer. | Per-machine operational state like `STATE_FILE` — never part of presets; managed by the GUI itself (forced on while open when the Ramp tab checkbox is checked, always off at exit — no selector row). The same unit creates `/run/veloscroll` for this file too. See [GUI-managed lifecycle keys in the README](README.md#gui-managed-lifecycle-keys-state_file-distance_file). |

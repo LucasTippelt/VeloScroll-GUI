@@ -16,7 +16,7 @@ class Banner(QFrame):
     """Thin strip above the tabs: warnings / last-failed op.
 
     Auto-hides after ~8 s unless sticky (persistent conditions like flag-off stay).
-    An optional action button ([Enable] in chunk 2) is supported from day one."""
+    An optional action button (e.g. [Enable]) is supported from day one."""
 
     AUTOHIDE_MS = 8000
 
@@ -31,7 +31,7 @@ class Banner(QFrame):
         lay.setContentsMargins(10, 4, 6, 4)
         self.label = QLabel("")
         self.label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        btn_action = QPushButton()          # hidden by default; chunk 2 wires [Enable] here
+        btn_action = QPushButton()          # hidden by default; the flag-off banner wires [Enable] here
         btn_action.clicked.connect(self._fire_action)
         btn_close = QPushButton("✕")
         btn_close.setFlat(True)
