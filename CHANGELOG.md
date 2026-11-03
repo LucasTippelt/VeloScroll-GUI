@@ -2,6 +2,10 @@
 
 - polishing GUI layout and feel
 
+# v2.0.0
+
+**Versioning-scheme re-baseline (see VERSIONING.md).** X now marks parity breaks with the daemon, Y new features/behavior changes in either component, Z bugfixes and doc updates. The shared contract is unchanged from Daemon v1.4.x (deploy-copy model).
+
 # v1.4.0
 
 **Aligned with Daemon v1.4.x (deploy-copy model).**
