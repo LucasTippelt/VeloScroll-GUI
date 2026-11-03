@@ -9,10 +9,12 @@ transcript pane shows every step; after a run that pulled new code the previous 
 as a one-line rollback command. A clean repo ends in an "already up to date" no-op — nothing is restarted."""
 
 import html
+import json
 import os
 import re
 import subprocess
 import sys
+import urllib.request
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (QApplication, QDialog, QHBoxLayout, QLabel, QMessageBox, QPlainTextEdit,
@@ -36,6 +38,42 @@ def _git_head(repo_dir):
     line = (p.stdout or "").strip()
     short, _, subject = line.partition(" ")
     return (short, subject) if short else None
+
+
+def _origin_head(repo_dir):
+    """Short hash of origin's HEAD via read-only `git ls-remote origin HEAD` (no .git writes, no branch name —
+    main or master both resolve through the remote's HEAD symref); None when offline / not a git checkout."""
+    try:
+        p = subprocess.run(["git", "-C", repo_dir, "ls-remote", "origin", "HEAD"],
+                           capture_output=True, text=True, timeout=5)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    if p.returncode != 0:
+        return None
+    lines = [l for l in (p.stdout or "").splitlines() if l.strip()]
+    full = lines[0].split()[0] if lines else ""
+    return full[:9] if full else None
+
+
+def _origin_subject(web_base, sha):
+    """First line of a remote commit's message via the GitHub REST API; None when unavailable.
+
+    ls-remote carries no subjects and fetching would write to .git (forbidden here), so this is a
+    read-only HTTP GET — GitHub remotes only (web_base None -> hash without message, like every other
+    non-GitHub degradation in this dialog). Offline / rate-limited / malformed responses degrade to None."""
+    if not web_base or not sha:
+        return None
+    url = web_base.replace("https://github.com/", "https://api.github.com/repos/") + f"/commits/{sha}"
+    try:
+        req = urllib.request.Request(url, headers={"Accept": "application/vnd.github+json",
+                                                   "User-Agent": "veloscroll-gui"})
+        with urllib.request.urlopen(req, timeout=5) as r:
+            data = json.loads(r.read().decode("utf-8"))
+    except Exception:
+        return None
+    msg = (data.get("commit") or {}).get("message") or ""
+    first = msg.splitlines()[0].strip() if msg else ""
+    return first or None
 
 
 def _repo_web_base(repo_dir):
@@ -131,27 +169,37 @@ class UpdateDialog(QDialog):
         root.addWidget(self.lbl_rollback)
 
     def _set_info(self):
-        """(Re)render the top info label for the current HEAD: rich text with a clickable commit link when
-        both the web base and a HEAD are known, else exactly today's plain text (no link)."""
+        """(Re)render the top info label for the current HEAD. `current commit` is the LOCAL head (what is
+        running), always plain text — deliberately no link: an unpushed local commit has nothing to point at,
+        so a GitHub link could mislead about what an update would actually pull. While origin is ahead an
+        extra `latest on origin:` line shows that (real remote) commit with a clickable GitHub link when
+        available — omitted when up to date or the remote is unknown."""
         gui = self._target == "gui"
         repo_dir = GUI_DIR if gui else DAEMON_DIR
         head = _git_head(repo_dir)
+        remote = _origin_head(repo_dir)
         base = self._web_base
-        if head and base:
-            cur = (f'current commit: <a href="{base}/commit/{head[0]}">{head[0]}</a> — '
-                   f'{html.escape(head[1]).replace(chr(10), "<br>")}')   # the subject may carry HTML characters
-        else:
-            cur = (f"current commit: {head[0]} — {head[1]}" if head
-                   else f"current commit: unknown (is {repo_dir} a git checkout?)")
-        body = ("Updates the GUI only (/opt/veloscroll-gui):\n\n" + cur + "\n\n"
+        cur = (f"current commit: {head[0]} — {head[1]}" if head
+               else f"current commit: unknown (is {repo_dir} a git checkout?)")
+        latest = None
+        if remote and (not head or remote != head[0]):
+            subject = _origin_subject(base, remote)   # GitHub only; None -> hash without message
+            suffix = f" — {html.escape(subject)}" if subject else ""
+            latest = (f'latest on origin: <a href="{base}/commit/{remote}">{remote}</a>{suffix}' if base
+                      else f"latest on origin: {remote}")
+        rich = bool(latest and base)                  # only the origin line ever carries a link
+        if rich:
+            cur = html.escape(cur).replace("\n", "<br>")   # the subject may carry HTML characters; \n collapses in rich text
+        mid = ("\n" + latest) if latest else ""
+        body = ("Updates the GUI only (/opt/veloscroll-gui):\n\n" + cur + mid + "\n\n"
                 "`git pull --ff-only`. The GUI is not a service — after a successful pull that "
                 "changes code, VeloScroll GUI closes & reopens itself automatically. Your config.ini "
                 "lives outside the repo and is untouched.") if gui else (
-            "Updates the daemon only (/opt/veloscroll), per docs/UPDATING.md:\n\n" + cur + "\n\n"
+            "Updates the daemon only (/opt/veloscroll), per docs/UPDATING.md:\n\n" + cur + mid + "\n\n"
             "`git pull --ff-only`, refreshes veloscroll.service + daemon-reload when the release "
             "changed it, restarts the service and tails the journal. Your config.ini lives outside "
             "the repo and is untouched.")
-        if head and base:
+        if rich:
             self.info.setTextFormat(Qt.RichText)      # \n collapses in rich text — convert to <br>
             self.info.setOpenExternalLinks(True)
             self.info.setText(body.replace("\n", "<br>"))

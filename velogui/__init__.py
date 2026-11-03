@@ -2,7 +2,7 @@
 import os
 
 APP_NAME = "VeloScroll"
-VERSION = "2.0.1"   #v2.0.0 re-baselines to the new versioning scheme (see VERSIONING.md); shared contract unchanged from Daemon v1.4.x
+VERSION = "2.0.2"   #new scheme since v2.0.0 (see VERSIONING.md): X parity break, Y feature/behavior change in either component, Z bugfix/docs
 
 DAEMON_DIR = "/opt/veloscroll"
 CONFIG_PATH = "/etc/veloscroll/config.ini"

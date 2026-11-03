@@ -50,6 +50,7 @@ from .update_check import UpdateCheckJob
 from .update_dialog import UpdateDialog
 
 _SERVICE_COLORS = {"active": "#16a34a", "failed": "#dc2626"}
+_UPDATE_BTN_AMBER = "background-color: #fef3c7; color: #1f2937;"   # update-button tint while an update is available — same pair as backups_tab's CHANGED_BG/CHANGED_FG, legible under light AND dark themes
 
 # (title, static hint) per key — the short form of config.ini.example's comments
 TITLES = {
@@ -318,19 +319,19 @@ class ConfigTab(QWidget):
         update_col = QVBoxLayout(update_wrap)
         update_col.setContentsMargins(0, 0, 0, 0)
         update_col.addStretch(1)
-        btn_update = QPushButton("Update daemon…")     # one-click update per docs/UPDATING.md
-        btn_update.setToolTip(
+        self.btn_update = QPushButton("Update daemon…")     # one-click update per docs/UPDATING.md; instance attrs — _on_update_check tints them amber while an update is available
+        self.btn_update.setToolTip(
             "Pull the latest daemon code from git and restart the service (docs/UPDATING.md). "
             "The dialog shows a transcript of every step plus a rollback command for the previous commit.")
-        btn_update.clicked.connect(self._open_update_dialog)
-        update_col.addWidget(btn_update)
-        btn_update_gui = QPushButton("Update GUI…")
-        btn_update_gui.setToolTip(
+        self.btn_update.clicked.connect(self._open_update_dialog)
+        update_col.addWidget(self.btn_update)
+        self.btn_update_gui = QPushButton("Update GUI…")
+        self.btn_update_gui.setToolTip(
             "Pull the latest GUI code from git (git pull --ff-only in /opt/veloscroll-gui). The GUI is not a "
             "service — after a successful pull that changes code, it closes & reopens itself automatically. "
             "The dialog shows a transcript of every step plus a rollback command for the previous commit.")
-        btn_update_gui.clicked.connect(self._open_gui_update_dialog)
-        update_col.addWidget(btn_update_gui)
+        self.btn_update_gui.clicked.connect(self._open_gui_update_dialog)
+        update_col.addWidget(self.btn_update_gui)
         btn_check_updates = QPushButton("Check for updates…")
         btn_check_updates.setToolTip(
             "Re-check now whether the daemon or GUI repo is behind its origin (read-only git ls-remote, "
@@ -656,6 +657,9 @@ class ConfigTab(QWidget):
         daemon_avail, gui_avail = results
         manual = self._check_manual               # set by [Check for updates…]; the other callers stay silent
         self._check_manual = False
+        # amber tint per target (None/unknown stays unstyled — actionable news only, like the label)
+        self.btn_update.setStyleSheet(_UPDATE_BTN_AMBER if daemon_avail else "")
+        self.btn_update_gui.setStyleSheet(_UPDATE_BTN_AMBER if gui_avail else "")
         if daemon_avail and gui_avail:
             text = "Update to DAEMON and GUI available"
         elif daemon_avail:

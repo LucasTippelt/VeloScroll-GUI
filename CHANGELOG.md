@@ -2,6 +2,13 @@
 
 - polishing GUI layout and feel
 
+# v2.0.2
+
+**GUI-only changes, parity with Daemon v2.0.X**.
+- **Amber update buttons** — [Update daemon…] / [Update GUI…] now light up amber while an update is available for that target (the indicator note has existed since v1.3.3; the button tinting was never committed). Resets to theme default when up to date or the check is unknown; same amber pair as the Backups tab's changed rows — legible under light and dark themes.
+- **Update dialog shows origin's latest commit** — while origin is ahead of local HEAD, the info label gains a `latest on origin: <hash> — <subject>` line (clickable GitHub link) so the dialog says what an update would pull; `current commit:` stays the local head (what is running). The subject comes from a read-only GitHub API call (`ls-remote` carries no subjects, and fetching would write to `.git`); non-GitHub remotes / offline / rate-limited degrade to hash without message.
+- **No link on `current commit`** — the update dialog's "current commit:" line (local head) is plain text again: an unpushed local commit has nothing to point at, and the GitHub link risked misinforming about what an update would actually pull. The `latest on origin:` line keeps its link since it points at a real remote commit.
+
 # v2.0.0
 
 **Versioning-scheme re-baseline (see VERSIONING.md).** X now marks parity breaks with the daemon, Y new features/behavior changes in either component, Z bugfixes and doc updates. The shared contract is unchanged from Daemon v1.4.x (deploy-copy model).
