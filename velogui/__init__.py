@@ -2,7 +2,7 @@
 import os
 
 APP_NAME = "VeloScroll"
-VERSION = "1.3.4"   #initial release was 1.3.0 to match daemon version, 1.3.X releases on both sides are compatible and feature-aligned
+VERSION = "1.4.0"   #initial release was 1.3.0 to match daemon version; v1.4.0 aligns with Daemon v1.4 (deploy-copy model)
 
 DAEMON_DIR = "/opt/veloscroll"
 CONFIG_PATH = "/etc/veloscroll/config.ini"
@@ -13,8 +13,17 @@ UNIT_PATH = "/etc/systemd/system/veloscroll.service"
 
 GUI_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # /opt/veloscroll-gui
 ICON_PATH = os.path.join(GUI_DIR, "velogui", "icon.png")
-PRIV_PATH = os.path.join(GUI_DIR, "helpers", "priv.py")
-SUDOERS_FILE = "/etc/sudoers.d/veloscroll-gui"
+
+# privileged helper service (replaces the old sudo -n priv.py path) — the unit executes the DEPLOYED copy;
+# helpers/helper_service.py in the repo is source only
+HELPER_SERVICE_PATH = "/usr/lib/veloscroll-gui/helper_service.py"   # runtime copy — must stay root-owned 755
+REPO_HELPER_SOURCE = os.path.join(GUI_DIR, "helpers", "helper_service.py")   # user-owned source; redeployed by Update GUI… when a release changes it
+BUS_NAME = "org.veloscroll.gui"          # system-bus name owned by the service (veloscroll-gui-helper.service)
+HELPER_OBJECT_PATH = "/org/veloscroll/gui/Helper"
+HELPER_IFACE = "org.veloscroll.gui.Helper"
+# install locations referenced by the permissions-panel fix text:
+HELPER_UNIT_PATH = "/etc/systemd/system/veloscroll-gui-helper.service"
+POLICY_FILE_PATH = "/usr/share/polkit-1/actions/org.veloscroll.gui.policy"
 
 # the tab pages in display order — main.py adds them to the QTabWidget in this order and STARTUP_TAB
 # (a GUI-only config key) stores one of these exact labels for the tab opened on startup

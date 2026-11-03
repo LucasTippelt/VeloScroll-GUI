@@ -38,13 +38,13 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDoubleSpinBo
                                 QHBoxLayout, QLabel, QLineEdit, QPushButton, QSpinBox, QTableWidget,
                                 QTableWidgetItem, QVBoxLayout, QWidget)
 
-from . import CONFIG_PATH, TABS
+from . import BUS_NAME, CONFIG_PATH, TABS
 from . import values as vmod
 from .apply_bar import ApplyBar
 from .capture import CaptureDialog
 from .config_model import FALLBACK, GUI_KEYS, KEY_KINDS, NULLABLE, RAMP_KEYS, _render, ConfigModel
 from .errors import popup_error
-from .permissions_panel import PermissionsPanel, SUDOERS_FIX
+from .permissions_panel import PermissionsPanel, SERVICE_FIX
 from .proc import PrivError, PrivJob, run_priv
 from .update_check import UpdateCheckJob
 from .update_dialog import UpdateDialog
@@ -776,10 +776,13 @@ class ConfigTab(QWidget):
         pending = self._take_pending()
         if pending is None:
             return
-        if kind == PrivError.KIND_RULE_MISSING:
-            popup_error(self.window(), "Privileged write refused — sudoers rule missing",
-                        f"sudo refused the privileged operation (no matching NOPASSWD rule for this user).\n\n"
-                        f"Install it once (needs your password), then use [Re-check] in Status → Permissions:\n\n{SUDOERS_FIX}")
+        if kind == PrivError.KIND_SERVICE_MISSING:
+            popup_error(self.window(), "Privileged write refused — helper service missing",
+                        f"The root helper service ({BUS_NAME}) is not running on the system bus, so the "
+                        f"privileged operation could not be issued.\n\n"
+                        f"Install it once (needs your password), then use [Re-check] in Status → Permissions:\n\n{SERVICE_FIX}")
+        elif kind == PrivError.KIND_NOT_AUTHORIZED:
+            popup_error(self.window(), "Privileged write refused — authorization", detail or str(kind))
         else:
             popup_error(self.window(), "Privileged operation failed", detail or str(kind))
 

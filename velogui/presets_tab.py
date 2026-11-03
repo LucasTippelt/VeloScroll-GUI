@@ -315,6 +315,6 @@ class PresetsTab(QWidget):
         if job is not self._job:
             return                                       # a newer operation superseded this one
         self._job = None
-        hint = " — install the scoped sudoers rule (see the Permissions panel)" \
-            if kind == PrivError.KIND_RULE_MISSING else ""
+        hint = " — install and start the helper service (see the Permissions panel)" \
+            if kind == PrivError.KIND_SERVICE_MISSING else ""
         self._log("FAILED: " + detail + hint)

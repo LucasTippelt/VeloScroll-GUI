@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC
+ "-//freedesktop//DTD PolicyKit Configuration File 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1.0/policyconfig.dtd">
+
+<!--
+  VeloScroll GUI helper service (org.veloscroll.gui on the system bus).
+
+  Two tiers:
+    read / config / service — `yes`: silent for any local user with a session. These expose no input
+      data and every write is re-validated by the daemon's own parser, so unattended invocation is
+      nuisance-level at worst. A per-machine override .policy can tighten any of them without code changes.
+    capture / update — `auth_admin`: the native polkit prompt on every call (no _keep).
+
+  allow_inactive=no everywhere: a caller with no session (cron, logged-out background process) gets
+  nothing; an interactive user (graphical or SSH) is "active" and can use the yes tier without any
+  agent. The auth tier additionally needs a polkit agent in the session (KDE/GNOME/XFCE ship one for
+  both X11 and Wayland; minimal WMs: install polkit-gtk-auth).
+-->
+
+<policyconfig>
+
+  <vendor>VeloScroll</vendor>
+  <vendor_url>https://github.com/LucasTippelt/VeloScroll-GUI</vendor_url>
+
+  <action id="org.veloscroll.gui.read">
+    <description>Read VeloScroll status</description>
+    <message>Authentication is required to read the VeloScroll service logs and list input devices.</message>
+    <defaults>
+      <allow_any>yes</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>yes</allow_active>
+    </defaults>
+  </action>
+
+  <action id="org.veloscroll.gui.config">
+    <description>Change the VeloScroll configuration or presets</description>
+    <message>Authentication is required to write /etc/veloscroll/config.ini or manage VeloScroll presets.</message>
+    <defaults>
+      <allow_any>yes</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>yes</allow_active>
+    </defaults>
+  </action>
+
+  <action id="org.veloscroll.gui.service">
+    <description>Start or stop the VeloScroll service</description>
+    <message>Authentication is required to start or stop the veloscroll systemd service.</message>
+    <defaults>
+      <allow_any>yes</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>yes</allow_active>
+    </defaults>
+  </action>
+
+  <action id="org.veloscroll.gui.capture">
+    <description>Capture button presses from input devices</description>
+    <message>Authentication is required to read button presses from your input devices for VeloScroll button capture.</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+  </action>
+
+  <action id="org.veloscroll.gui.update">
+    <description>Update VeloScroll (daemon or GUI)</description>
+    <message>Authentication is required to update VeloScroll: this runs git pull in /opt/veloscroll or /opt/veloscroll-gui (as your user) and, for a daemon update, refreshes and restarts the service as root.</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+  </action>
+
+</policyconfig>

@@ -2,6 +2,15 @@
 
 - polishing GUI layout and feel
 
+# v1.4.0
+
+**Aligned with Daemon v1.4.x (deploy-copy model).**
+- **polkit + D-Bus helper replaces the sudoers rule** — every privileged operation now goes through a root-owned system-bus service (`helpers/helper_service.py`, bus name `org.veloscroll.gui`) gated per call by polkit (`org.veloscroll.gui.policy`): read-only operations (ping / logs / devices) and config, preset & service management pass for any logged-in user without a prompt, while button capture and both updates raise the native authentication prompt on every start. The old argument-unrestricted NOPASSWD sudoers rule is retired — remove it if an earlier version installed one: `sudo rm /etc/sudoers.d/veloscroll-gui`. One-time setup now installs three files instead of a sudoers line: the polkit policy (`/usr/share/polkit-1/actions/`), the systemd unit (`veloscroll-gui-helper.service`, enabled alongside the daemon's), and — on system buses that deny name ownership by default (a common hardening) — a small bus drop-in (`org.veloscroll.gui.conf`) granting root ownership of the bus name. The one-click updates run their `git pull` step as **the checkout's owning user** (the service drops privileges per git call via setpriv), so no `safe.directory` setup is needed and `.git` stays uniformly owned; only the restart / service-file parts of a daemon update run as root.
+- **deploy-copy model for the helper** — the helper's runtime copy deploys to `/usr/lib/veloscroll-gui` (root-owned 755) and the unit executes *that* copy; the repo's `helpers/helper_service.py` is plain source, so the repo stays uniformly user-writable and a `git pull` can touch any file. `[Update GUI…]` redeploys the helper and self-restarts its service when a release changes it (the restart is scheduled after the transcript is delivered); a helper-unchanged pull leaves the running service untouched.
+- **Capture dialog closes when authentication is cancelled** — denying or cancelling the polkit prompt for a capture stream now dismisses the dialog instead of leaving it open with a "listener stopped" note (other listener failures keep their [Refresh source] hint).
+- The Permissions panel's four checks are re-pointed at the new model: helper service reachable on the system bus, `config.ini`, systemd unit, and the deployed helper copy `/usr/lib/veloscroll-gui/helper_service.py` root-owned without user/group write bits — each with its copy-paste fix as before.
+- **Input group no longer required** — button capture and root device enumeration now go through `priv.py`: a new read-only `capture` subcommand streams press edges as JSON (nodes opened strictly O_RDONLY, injection intentionally unsupported), the Capture dialog's source detection falls back to `priv.py devices` whenever in-process enumeration is unavailable, and its listener consumes that stream, re-arming itself when the helper's time cap expires. The Permissions panel drops its input-group check (four checks remain); if you added membership during an earlier setup it can be removed: `sudo gpasswd -d $USER input`.
+
 # v1.3.4
 
 **GUI-only changes, parity with Daemon v1.3.X**.

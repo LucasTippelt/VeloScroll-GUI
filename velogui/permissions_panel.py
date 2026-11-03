@@ -1,125 +1,62 @@
-"""Permissions panel: five prerequisite checks, each gap with its copy-paste fix.
+"""Permissions panel: four prerequisite checks, each gap with its copy-paste fix.
 
 Checks (per plan):
- 1. sudo rule   — `sudo -n helpers/priv.py ping` via proc.run_priv
- 2. input group — current user in the `input` group (needed to open /dev/input/* in-process)
- 3. config.ini  — /etc/veloscroll/config.ini exists
- 4. unit        — unit file present AND `systemctl is-enabled veloscroll` == enabled
- 5. helper      — helpers/priv.py root-owned and without user/group write bits (a user-writable
-                  sudo-run helper is a live privilege-escalation vector)
+ 1. helper service — `Ping` over the system bus via proc.run_priv; reachable means the root-owned
+                     D-Bus service is running AND the polkit policy is installed (a missing policy
+                     makes even Ping fail authorization). This single path covers every privileged
+                     operation, including button capture and root device enumeration — no input-group
+                     membership is needed. auth_admin operations additionally need a polkit agent in
+                     your session (KDE/GNOME/XFCE ship one; minimal WMs: install polkit-gtk-auth)
+ 2. config.ini     — /etc/veloscroll/config.ini exists
+ 3. unit           — the veloscroll daemon's unit file present AND `systemctl is-enabled` == enabled
+ 4. helper         — the DEPLOYED runtime copy /usr/lib/veloscroll-gui/helper_service.py root-owned and without
+                     user/group write bits (a user-writable root service script is a live
+                     privilege-escalation vector; the repo's helpers/helper_service.py is plain source)
 
-All checks run synchronously on [Re-check] (the ping call fails fast via -n).
+All checks run synchronously on [Re-check] (the Ping call fails fast: no owner -> ServiceUnknown,
+no policy -> NotAuthorized).
 """
 import getpass
 import os
-import subprocess
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (QApplication, QGroupBox, QHBoxLayout, QLabel, QPlainTextEdit,
                                QPushButton, QVBoxLayout, QWidget)
 
-from . import CONFIG_PATH, PRIV_PATH, SUDOERS_FILE, UNIT_PATH
+from . import BUS_NAME, CONFIG_PATH, GUI_DIR, HELPER_SERVICE_PATH, REPO_HELPER_SOURCE, UNIT_PATH
 from .proc import PrivError, run_priv, systemctl_enabled
 
 USER = getpass.getuser()
 
-# The rule names the helper itself (direct execution, its own shebang — same pattern as the
-# documented preset rule). Listing it with a `python3` interpreter in front would not match:
-# sudo then treats the script path as the single fixed argument and refuses any subcommand.
-SUDOERS_FIX = (
-    f"echo '{USER} ALL=(root) NOPASSWD: {PRIV_PATH}' | "
-    f"sudo tee {SUDOERS_FILE} && sudo visudo -cf {SUDOERS_FILE}"
-)
+# Install the unit + policy and start the service (the whole privileged path in one line). If it
+# fails to start, `journalctl -u veloscroll-gui-helper` (as root) shows why — usually missing
+# python3-dbus / python3-gi system packages.
+SERVICE_FIX = (
+    f"sudo cp {GUI_DIR}/veloscroll-gui-helper.service /etc/systemd/system/ && "
+    f"sudo cp {GUI_DIR}/org.veloscroll.gui.policy /usr/share/polkit-1/actions/ && "
+    f"sudo systemctl daemon-reload && sudo systemctl enable --now veloscroll-gui-helper")
+
+# The service runs but even Ping is refused: the policy file is missing (or polkitd hasn't seen it).
+POLICY_FIX = f"sudo cp {GUI_DIR}/org.veloscroll.gui.policy /usr/share/polkit-1/actions/"
 
 
-def check_sudo_rule():
+def check_helper_service():
     try:
         out = run_priv(["ping"])
-        return True, f"sudo rule works (priv.py answered '{out}')", None
+        return True, f"helper service reachable (answered '{out}')", None
     except PrivError as e:
-        if e.kind == PrivError.KIND_RULE_MISSING:
-            return False, "scoped sudoers rule missing or not matching this user/command", SUDOERS_FIX
-        if e.kind == PrivError.KIND_NOT_ROOT:
-            return False, "helper ran but was not root — the rule is broken", SUDOERS_FIX
-        return False, f"priv.py probe failed: {e}", None
-
-
-def _in_group_on_disk(group_name):
-    """Membership per /etc/group (the file, not this process's credentials).
-
-    A process's groups are fixed at login: a usermod -aG done after the GUI started shows up here
-    but NOT in `id -nG` until the process is restarted — that is the stale-process case."""
-    try:
-        with open("/etc/group", "r", encoding="utf-8") as f:
-            for line in f:
-                parts = line.rstrip("\n").split(":")
-                if len(parts) >= 4 and parts[0] == group_name:
-                    return USER in (parts[3].split(",") if parts[3] else [])
-    except OSError:
-        pass
-    return False
-
-
-def _process_groups():
-    """This process's own group names via `id -nG` (children inherit the GUI's credentials).
-
-    This — not /etc/group — decides whether in-process /dev/input opens succeed."""
-    try:
-        p = subprocess.run(["id", "-nG"], capture_output=True, text=True, timeout=5)
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return None
-    if p.returncode != 0:
-        return None
-    return p.stdout.split()
-
-
-def _other_gui_instances():
-    """PIDs of other running copies of this GUI.
-
-    The window in front of the user may belong to an OLDER instance (e.g. one from a previous login
-    session that was never killed) — its stale credentials would then explain a check that looks
-    impossible after a re-login."""
-    me = os.getpid()
-    out = []
-    for pid in os.listdir("/proc"):
-        if not pid.isdigit() or int(pid) == me:
-            continue
-        try:
-            with open(f"/proc/{pid}/cmdline", "rb") as f:
-                argv0, _, rest = f.read().partition(b"\x00")
-        except OSError:
-            continue
-        if b"python" not in argv0:
-            continue
-        cmd = (argv0 + b" " + rest).decode("utf-8", "replace")
-        if "/opt/veloscroll-gui/main.py" in cmd or ("veloscroll-gui" in cmd and "main.py" in cmd):
-            out.append(int(pid))
-    return sorted(out)
-
-
-def check_input_group():
-    groups = _process_groups()
-    if groups is None:
-        return False, "could not determine current user's groups", "sudo usermod -aG input $USER   # then log out and back in"
-    if "input" in groups:
-        return True, f"user '{USER}' is in the input group", None
-    if _in_group_on_disk("input"):
-        detail = (f"user '{USER}' IS in the input group on disk (/etc/group), but this GUI process "
-                  f"(PID {os.getpid()}) does not have it — its groups are: {', '.join(groups)}. "
-                  f"Processes keep the groups of whatever launched them, so restarting the GUI from "
-                  f"within the same session (or a terminal opened in it) does NOT pick up new membership.")
-        others = _other_gui_instances()
-        if others:
-            detail += (f"  Other GUI instance(s) are still running (PID {', '.join(map(str, others))}) — "
-                       f"you may be looking at an old one; close it and start a fresh one.")
-        return (False, detail,
-                "sg input /opt/veloscroll-gui/run.sh   # launch with the group right now (no re-login needed)\n"
-                "# or log out AND back in — only helps if the logout actually ends this session "
-                "(check: loginctl list-sessions)")
-    return (False,
-            f"user '{USER}' is NOT in the input group — needed to open /dev/input/* in-process",
-            "sudo usermod -aG input $USER   # requires logging out and back in")
+        if e.kind == PrivError.KIND_SERVICE_MISSING:
+            detail = (f"{BUS_NAME} is not running on the system bus — install and start it "
+                      "(if it fails to start, check `journalctl -u veloscroll-gui-helper` as root; "
+                      "usually python3-dbus / python3-gi are missing)")
+            return False, detail, SERVICE_FIX
+        if e.kind == PrivError.KIND_NOT_AUTHORIZED:
+            return (False,
+                    f"service is running but polkit refused even the no-auth probe — the policy file "
+                    f"is probably not installed ({e.stderr or str(e)})",
+                    POLICY_FIX)
+        return False, f"helper service probe failed: {e}", None
 
 
 def check_config():
@@ -140,28 +77,46 @@ def check_unit():
     return True, "unit file present and service enabled", None
 
 
-def check_helper_integrity(path=PRIV_PATH):
-    """The sudo-executed helper must stay out of the user's reach: it runs as root under the scoped
-    rule, so a user-writable priv.py is a live privilege-escalation vector (the user edits what
-    sudo runs). Passes only when root-owned with no group/other write bits — 755 (the README mode)
-    keeps the exec bit and passes; owner bits are irrelevant once uid == 0."""
+def check_helper_integrity(path=HELPER_SERVICE_PATH):
+    """The root-run helper script must stay out of the user's reach — and so must its directory: it runs as
+    root under systemd, so a user-writable helper_service.py is an escalation vector (edit what the service
+    executes), and a user-writable directory is one too (rename-swap: replacing a file only needs write on the
+    containing directory, not on the file). This inspects the DEPLOYED runtime copy the unit executes
+    (/usr/lib/veloscroll-gui/helper_service.py), not the repo's helpers/helper_service.py — that one is plain
+    source, user-writable by design, so a git pull can only ever touch it and can never drift the runtime
+    copy. Passes only when both are root-owned with no group/other write bits — 755 (the install mode) keeps
+    the exec bit and passes; owner bits are irrelevant once uid == 0."""
     try:
         st = os.stat(path)
     except OSError:
-        return False, f"{path} is missing — reinstall the GUI", None
-    if st.st_uid != 0 or (st.st_mode & 0o022):
-        detail = (f"{path} is not root-owned and/or has user/group write bits "
-                  f"(uid={st.st_uid}, mode={oct(st.st_mode & 0o777)}) — a user-writable helper that sudo runs as root "
-                  "is an escalation vector. A manual `git pull` in the GUI repo run as your user re-creates it "
-                  "user-owned if a commit touches it (the repo is user-owned per README step 5); "
-                  "`priv.py update-gui` is safe — its git runs as root.")
-        return False, detail, f"sudo chown root:root {PRIV_PATH}\nsudo chmod 755 {PRIV_PATH}"
-    return True, f"{path} is root-owned and not user/group-writable", None
+        return False, f"{path} is missing — deploy it from the repo source", \
+            f"sudo mkdir -p {os.path.dirname(path)} && sudo cp {REPO_HELPER_SOURCE} {path} && " \
+            f"sudo chown root:root {os.path.dirname(path)} {path} && " \
+            f"sudo chmod 755 {os.path.dirname(path)} {path} && " \
+            "sudo systemctl restart veloscroll-gui-helper"
+    d = os.path.dirname(path)
+    dst = os.stat(d)
+    bad_file = st.st_uid != 0 or (st.st_mode & 0o022)
+    bad_dir = dst.st_uid != 0 or (dst.st_mode & 0o022)
+    if not (bad_file or bad_dir):
+        return True, f"{path} and its directory are root-owned and not user/group-writable", None
+    what = []
+    if bad_file:
+        what.append(f"{path} (uid={st.st_uid}, mode={oct(st.st_mode & 0o777)})")
+    if bad_dir:
+        what.append(f"its directory {d} (uid={dst.st_uid}, mode={oct(dst.st_mode & 0o777)})")
+    detail = (" — a user-writable script that the root service executes is an escalation vector, and a "
+              "user-writable directory lets anyone swap it via rename. The repo source "
+              f"({REPO_HELPER_SOURCE}) is user-writable by design — a reference, not a trusted copy — so the "
+              "fix redeploys it (restoring protection AND content); a plain re-chown would only restore "
+              "protection.")
+    return False, ("not root-owned and/or has user/group write bits: " + "; ".join(what)) + detail, \
+        f"sudo cp {REPO_HELPER_SOURCE} {path} && sudo chown root:root {d} {path} && " \
+        f"sudo chmod 755 {d} {path} && sudo systemctl restart veloscroll-gui-helper"
 
 
 CHECKS = (
-    ("sudo rule", check_sudo_rule),
-    ("input group", check_input_group),
+    ("helper service", check_helper_service),
     ("config.ini", check_config),
     ("systemd unit", check_unit),
     ("helper integrity", check_helper_integrity),
@@ -203,7 +158,7 @@ class _CheckRow(QWidget):
 
 
 class PermissionsPanel(QGroupBox):
-    """The five checks as rows (OK/gap + fix command), rerunnable via [Re-check]."""
+    """The four checks as rows (OK/gap + fix command), rerunnable via [Re-check]."""
 
     checked = Signal()   # emitted after a full re-run (synchronous)
 
@@ -211,7 +166,7 @@ class PermissionsPanel(QGroupBox):
         super().__init__("Permissions", parent)
         lay = QVBoxLayout(self)
         top = QHBoxLayout()
-        hint = QLabel("Privileged operations and /dev/input access prerequisites")    # no forced color (theme-safe)
+        hint = QLabel("Prerequisites for the GUI's privileged operations")    # no forced color (theme-safe)
         self.btn_recheck = QPushButton("Re-check")
         self.btn_recheck.clicked.connect(self.recheck)
         top.addWidget(hint, 1)
@@ -221,7 +176,7 @@ class PermissionsPanel(QGroupBox):
         lay.addLayout(self._rows_box)
 
     def recheck(self):
-        """Runs all five checks synchronously and rebuilds the rows."""
+        """Runs all four checks synchronously and rebuilds the rows."""
         results = []
         for name, fn in CHECKS:
             try:

@@ -1,12 +1,12 @@
 """Update dialog: one-click daemon update per docs/UPDATING.md and one-click GUI update.
 
-Runs `priv.py update` (daemon) or `priv.py update-gui` as root through the scoped sudoers rule in a
-PrivJob worker thread: git pull --ff-only in /opt/veloscroll, service-file refresh + daemon-reload only
-when the release changed veloscroll.service, then a restart and a journal tail — or just git pull
---ff-only in /opt/veloscroll-gui for the GUI (no service; after a successful pull that changes code,
-the running instance spawns a fresh one and quits itself). The transcript pane shows every step; after
-a run that pulled new code the previous commit hash is offered as a one-line rollback command. A clean
-repo ends in an "already up to date" no-op — nothing is restarted."""
+Runs the helper service's Update (daemon) or UpdateGui as root — polkit auth_admin, so a native
+prompt asks for confirmation first — in a PrivJob worker thread: git pull --ff-only in /opt/veloscroll,
+service-file refresh + daemon-reload only when the release changed veloscroll.service, then a restart
+and a journal tail — or just git pull --ff-only in /opt/veloscroll-gui for the GUI (no service; after
+a successful pull that changes code, the running instance spawns a fresh one and quits itself). The
+transcript pane shows every step; after a run that pulled new code the previous commit hash is offered
+as a one-line rollback command. A clean repo ends in an "already up to date" no-op — nothing is restarted."""
 
 import html
 import os
@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (QApplication, QDialog, QHBoxLayout, QLabel, QMess
 from . import DAEMON_DIR, GUI_DIR
 from .proc import PrivError, PrivJob
 
-UPDATE_TIMEOUT_S = 120                          # a git pull over a slow link may outlive the default 30 s
+UPDATE_TIMEOUT_S = 180                          # advisory only: the helper enforces its own per-command caps (git 60 s)
 
 
 def _git_head(repo_dir):
@@ -103,7 +103,8 @@ class UpdateDialog(QDialog):
         row = QHBoxLayout()
         self.btn_run = QPushButton("Update GUI…" if gui else "Update daemon…")
         self.btn_run.setToolTip(
-            f"Runs `sudo -n priv.py {'update-gui' if gui else 'update'}` as root (asks for confirmation first)")
+            f"Runs the helper service's {'UpdateGui' if gui else 'Update'} as root "
+            "(polkit asks for confirmation first)")
         self.btn_run.clicked.connect(self._on_update)
         self.lbl_status = QLabel("")
         row.addWidget(self.btn_run)
@@ -166,11 +167,11 @@ class UpdateDialog(QDialog):
         box.setWindowTitle("Update VeloScroll GUI" if gui else "Update VeloScroll daemon")
         if gui:
             box.setText("Run the GUI update as root?\n\n"
-                        "sudo -n priv.py update-gui\n\n"
+                        "helper service: UpdateGui (polkit will ask for confirmation)\n\n"
                         "(git pull --ff-only in /opt/veloscroll-gui; restart the GUI afterwards to apply)")
         else:
             box.setText("Run the daemon update as root?\n\n"
-                        "sudo -n priv.py update\n\n"
+                        "helper service: Update (polkit will ask for confirmation)\n\n"
                         "(git pull --ff-only in /opt/veloscroll, service-file refresh when changed, restart)")
         box.setStandardButtons(QMessageBox.Ok | QMessageBox.Cancel)
         if box.exec() != QMessageBox.Ok:
@@ -275,8 +276,8 @@ class UpdateDialog(QDialog):
         self._job = None
         self.btn_run.setEnabled(True)
         text = (detail or "").strip()
-        hint = "\n\n— install the scoped sudoers rule first (see the Permissions panel)" \
-            if kind == PrivError.KIND_RULE_MISSING else ""
+        hint = "\n\n— install and start the helper service first (see the Permissions panel)" \
+            if kind == PrivError.KIND_SERVICE_MISSING else ""
         self.txt_log.setPlainText(text + hint)
         prev, result = _parse_markers(text)
         self._set_result_label(False, result or "update failed — see transcript")

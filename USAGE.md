@@ -13,12 +13,14 @@ table, this page's Apply/Cancel bar, and the [Permissions panel](#permissions-pa
   grabbed, config reload health (`reload OK` / `reload rejected: …` / `pending reload (~2 s)` when
   `config.ini` is newer than the last state-file update), and **[Update daemon…]**: a one-click update of
   the daemon only (per [docs/UPDATING.md](https://github.com/LucasTippelt/VeloScroll/blob/main/docs/UPDATING.md)) —
-  after confirmation it runs `priv.py update` as root: `git pull --ff-only` in `/opt/veloscroll`, a service-file
-  refresh + daemon-reload when the release changed `veloscroll.service`, then a restart and a journal tail. The
+    after confirmation it runs the helper service's `Update` (native polkit auth prompt): `git pull --ff-only` in `/opt/veloscroll`, run **as your user** (the checkout owner), then as root re-deploys any changed files to `/usr/lib/veloscroll`
+  a service-file refresh + daemon-reload when the release changed `veloscroll.service`, and a restart only if `veloscroll.py` or the unit changed, plus a journal tail. The
   dialog shows a transcript of every step; on a clean repo it ends in an "already up to date" no-op (nothing is
   restarted), and after a real update it offers the previous commit as a one-line rollback command. Directly
-  below it, **[Update GUI…]** updates the GUI only — after confirmation it runs `priv.py update-gui` as root:
-  `git pull --ff-only` in `/opt/veloscroll-gui`. The GUI is not a service, so there is nothing to restart via
+   below it, **[Update GUI…]** updates the GUI only — after confirmation it runs the helper service's `UpdateGui` (native polkit auth prompt):
+   `git pull --ff-only` in `/opt/veloscroll-gui`, run **as your user** (the checkout owner); when a release changes the helper it redeploys the runtime copy
+to `/usr/lib/veloscroll-gui` and restarts its service (the self-restart is scheduled after the transcript is
+delivered). The GUI is not a service, so there is nothing to restart via
   systemd; instead, after a successful pull that changes code, the running instance closes & reopens itself
   automatically (an "already up to date" no-op leaves it untouched). It shows the same transcript and offers
   the previous commit as a one-line rollback command. Your `config.ini` lives outside both repos and is
@@ -41,8 +43,8 @@ table, this page's Apply/Cancel bar, and the [Permissions panel](#permissions-pa
   any other unapplied edit. Press Apply to make a change stick across restarts; an unset key means on. See
   [Tray icon](#tray-icon).
 - **Apply / Cancel** (every tab page carries its own bar over the same buffer) — Apply validates inline
-  against the daemon's own checks, writes `/etc/veloscroll/config.ini` through the scoped sudoers rule
-  (`priv.py apply-config`), then confirms the reload from the state file (~2 s) or, without one, from the
+  against the daemon's own checks, writes `/etc/veloscroll/config.ini` through the polkit-gated helper service
+  (`ApplyConfig`), then confirms the reload from the state file (~2 s) or, without one, from the
   journal. Cancel discards unapplied edits; if a change was already applied earlier in this session it
   instead writes the previous config back through the same privileged path so the daemon reloads it.
   Unsaved changes are marked in every bar and in the window title.
@@ -120,10 +122,12 @@ next to the mouse it belongs to.)
 Select the mouse the daemon should grab and assign its buttons. The form on the left holds the device,
 DPI & button fields (`NAME_MATCH`, `DEVICE_MATCH`, `DPI`, `SCROLL_BTN`, `SCROLL_BTN_H`, `DISABLED_BTN`) —
 same shared edit buffer as everywhere else; each button row carries a **[Capture…]** dialog (press the
-physical button, click its code in the list).
+ physical button, click its code in the list). Listening runs through the helper service's `StartCapture` — a
+  polkit auth prompt appears on every start — which opens input nodes **read-only** by design: it can see your
+  presses but cannot inject events. Cancelling or denying that prompt closes the dialog again.
 
-- The dropdown on the right lists your input devices: enumeration runs in-process first (needs the
-  `input` group) and falls back to root (`priv.py devices`) when any node is unreadable. One physical
+- The dropdown on the right lists your input devices: enumeration runs in-process first (only applies when
+  you have direct `/dev/input` access) and falls back to the helper service's `Devices` (root) otherwise. One physical
   mouse usually exposes several event nodes — they collapse into a single entry annotated "(N nodes)".
   The daemon's own virtual output node, `veloscroll-mouse`, appears clearly labeled but cannot be
   selected; the device(s) currently grabbed are highlighted green on every refresh. **[Rescan]**
@@ -183,11 +187,10 @@ first.
 
 The page's Permissions group (below the values table) checks, with a copy-paste fix for each gap (and [Re-check]):
 
-1. the scoped sudoers rule (`sudo -n ... priv.py ping`),
-2. current user in the `input` group,
-3. `/etc/veloscroll/config.ini` exists,
-4. unit file present at `/etc/systemd/system/veloscroll.service` and service enabled,
-5. `helpers/priv.py` root-owned and not user/group-writable — it runs as root under the sudoers rule, so a user-writable helper would be an escalation vector (a manual `git pull` in the GUI repo can re-create it user-owned; [Re-check] surfaces that drift with the copy-paste fix).
+1. the helper service reachable on the system bus (a D-Bus `Ping`) — it performs every privileged operation, gated per call by polkit: read-only ops and config/preset/service management pass without a prompt, while button capture and both updates raise the native auth prompt on every start (no `input` group needed),
+2. `/etc/veloscroll/config.ini` exists,
+3. unit file present at `/etc/systemd/system/veloscroll.service` and service enabled,
+4. the deployed helper copy `/usr/lib/veloscroll-gui/helper_service.py` **and its directory** root-owned and not user/group-writable — the unit executes *that* copy as root, so a user-writable deployed helper (or its directory, via rename-swap) would be an escalation vector; the repo's `helpers/helper_service.py` is plain source, user-writable by design. [Re-check] surfaces drift of the deployed copy with the redeploy copy-paste fix.
 
 ## Config keys (hot-reloaded)
 

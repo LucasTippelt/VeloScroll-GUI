@@ -1,8 +1,10 @@
 """Device picker: choose the daemon's target mouse, write DEVICE_MATCH into the edit buffer.
 
-Enumeration is in-process first (`evdev.list_devices()` + open each node — works for a user in the
-input group); any unreadable node (permission denied / vanished) triggers the root fallback
-`priv.py devices`, whose JSON list then stands in for it. The virtual `veloscroll-mouse` output
+Enumeration is in-process first (`evdev.list_devices()` + open each node — only applies when the user
+has direct /dev/input access); any unreadable node (no such access / vanished) triggers the root
+fallback `priv.py devices`, whose JSON list then stands in for it. No input-group membership is
+required: without direct access every node is unreadable in-process and the fallback does all of the work.
+The virtual `veloscroll-mouse` output
 node appears in the list, clearly labeled, but cannot be selected — selecting a real device writes
 `DEVICE_MATCH = 0x46d, 0x4093` (hex pair) into the Config tab's edit buffer; Apply makes it stick.
 Devices without a USB ID (vendor/product both zero) are pinned by node path instead of a pair.
@@ -47,7 +49,7 @@ def enumerate_local():
         try:
             d = evdev.InputDevice(path)
         except OSError:
-            complete = False                 # permission denied (not in input group) or node vanished mid-scan
+            complete = False                 # no direct /dev/input access, or the node vanished mid-scan
             continue
         info = d.info
         found.append({"path": path, "name": d.name, "vendor": info.vendor, "product": info.product})
@@ -142,13 +144,13 @@ class DevicePicker(QGroupBox):
         if complete and local:
             self._populate(local, f"{len(local)} device(s) listed in-process")
             return
-        # partial reads OR an empty list (list_devices() permission-filters when the user is not in the
-        # input group — indistinguishable from "no devices"): ask the privileged helper for the full list
+        # partial reads OR an empty list (list_devices() permission-filters when the user has no direct
+        # /dev/input access — indistinguishable from "no devices"): ask the privileged helper for the full list
         self._scanning = True
         self._partial_local = list(local)
         why = ("some nodes were unreadable" if local else "no nodes were readable in-process")
         self.lbl_status.setText(f"in-process scan saw {len(local)} device(s) — {why}; "
-                                f"enumerating as root (priv.py devices)…")
+                                f"enumerating as root (helper service)…")
         job = PrivJob(["devices"], self)
         job.finished_ok.connect(self._on_devices_json)
         job.failed.connect(self._on_devices_fail)
@@ -157,8 +159,8 @@ class DevicePicker(QGroupBox):
     def _on_devices_fail(self, kind, detail):
         partial = getattr(self, "_partial_local", [])
         self._scanning = False                      # a failed fallback must never wedge [Rescan]
-        hint = " — install the scoped sudoers rule (see the Permissions panel)" \
-            if kind == PrivError.KIND_RULE_MISSING else ""
+        hint = " — install and start the helper service (see the Permissions panel)" \
+            if kind == PrivError.KIND_SERVICE_MISSING else ""
         self._populate(partial, f"{len(partial)} device(s) listed in-process; root fallback failed ({detail}){hint}")
 
     def _on_devices_json(self, out):

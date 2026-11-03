@@ -12,9 +12,13 @@ Subcommands:
   apply-config          read the whole config text from stdin, then validate + atomically replace
                         /etc/veloscroll/config.ini (no path argument — root never opens a caller-chosen file)
   logs [N]              last N journal lines of the veloscroll service (default 50)
-  devices               enumerate every /dev/input/event* node as JSON on stdout (root fallback for the
-                        device picker when in-process opens fail, e.g. user not in input group)
-  service <stop|start>  stop or start the veloscroll systemd unit (button-capture fallback stops the daemon
+   devices               enumerate every /dev/input/event* node as JSON on stdout (root fallback for the
+                         device picker when in-process opens fail, e.g. user not in input group)
+   capture <path>… [--max SECONDS]   stream EV_KEY press edges from one or more /dev/input/event<N> nodes as
+                         `{"code": N}` JSON lines on stdout (one per press edge, flushed immediately). Strictly
+                         read-only by design: every node is opened O_RDONLY and never written to — injection is
+                         intentionally unsupported. Default max 300 s, cap 3600 s; expiry exits 0 so the GUI re-arms
+   service <stop|start>  stop or start the veloscroll systemd unit (button-capture fallback stops the daemon
                         so a swallowed button code can be read from the physical node)
    preset <ops...>       strict passthrough to veloscroll_preset.py: save/loaddistances/loadfeel/
                          loadkeys/loaddevice/loadscroll/loadall NAME pairs, or list / backups / restore [BACKUP]
@@ -32,6 +36,7 @@ import configparser
 import datetime
 import glob
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -230,6 +235,104 @@ def cmd_devices(args):
         out.append({"path": path, "name": d.name,
                     "vendor": f"0x{info.vendor:x}", "product": f"0x{info.product:x}"})
     print(json.dumps(out))
+
+
+# --- capture ------------------------------------------------------------------------
+
+def cmd_capture(args):
+    """Stream EV_KEY press edges from /dev/input/event* nodes as JSON lines on stdout.
+
+    Read-only by design: every node is opened strictly O_RDONLY | O_NONBLOCK and never written to —
+    injection is intentionally unsupported (an input-group fd would be writable; this path must not
+    be). evdev.InputDevice is deliberately NOT used: its constructor tries O_RDWR first, which as root
+    would succeed and leave a writable fd behind — events are parsed from raw reads with struct instead
+    (the input_event layout is stable kernel ABI). One `{"code": N}` line per press edge (value == 1),
+    flushed immediately so the GUI consumer sees each press as it happens.
+
+    Nodes that vanish mid-stream (unplug / daemon grab) are dropped from the select set; when all of
+    them are gone, the reason goes to stderr and the exit code is 1. `--max` expiry is a clean exit 0 —
+    the GUI re-arms itself. No signal handling: the GUI kills the whole process group on stop."""
+    import json
+    import select
+    import struct
+
+    try:
+        from evdev import ecodes as e      # constants only (EV_KEY) — no device open, so no writable fd
+    except ImportError as exc:
+        _fail(f"cannot import evdev (is python3-evdev installed?): {exc}", 1)
+
+    paths = []
+    max_s = 300
+    i = 0
+    while i < len(args):
+        tok = args[i]
+        if tok == "--max":
+            i += 1
+            if i >= len(args):
+                _fail("capture: --max needs a value (seconds)", 1)
+            try:
+                max_s = int(args[i])
+            except ValueError:
+                _fail(f"capture: --max must be an integer, got {args[i]!r}", 1)
+            if not (0 < max_s <= 3600):
+                _fail("capture: --max must be a positive number of seconds (cap 3600)", 1)
+        elif tok.startswith("-"):
+            _fail(f"capture: unknown flag {tok!r} — the only option is `--max SECONDS`", 1)
+        else:
+            if not re.fullmatch(r"/dev/input/event[0-9]+", tok):
+                _fail(f"capture: invalid node path {tok!r} — expected /dev/input/event<N>", 1)
+            paths.append(tok)
+        i += 1
+    if not paths:
+        _fail("capture: no input nodes given (expected at least one /dev/input/event<N>)", 1)
+    if len(paths) > 16:
+        _fail(f"capture: too many nodes ({len(paths)}) — at most 16 are allowed", 1)
+
+    fds = {}
+    errors = []
+    for p in paths:
+        try:
+            fd = os.open(p, os.O_RDONLY | os.O_NONBLOCK)   # strictly read-only — never O_RDWR
+        except OSError as exc:
+            errors.append(f"{p}: {exc.strerror or exc}")
+            continue
+        fds[fd] = p
+    if not fds:
+        _fail("could not open any input node: " + "; ".join(errors[:3]), 1)
+
+    deadline = time.monotonic() + max_s
+    size = struct.calcsize("llHHi")                        # struct input_event (stable kernel ABI, LP64)
+    try:
+        while fds:
+            timeout = deadline - time.monotonic()
+            if timeout <= 0:
+                return                                     # --max expiry → clean exit 0; the GUI re-arms itself
+            ready, _w, _x = select.select(list(fds), [], [], timeout)
+            for fd in ready:
+                while True:
+                    try:
+                        raw = os.read(fd, 65536)
+                    except BlockingIOError:
+                        break                              # EAGAIN on the O_NONBLOCK fd — no more data right now, NOT a vanished node
+                    except OSError:
+                        del fds[fd]                        # real error (EIO/ENODEV): node vanished mid-stream (unplug / daemon grabbed it)
+                        break
+                    if not raw:
+                        del fds[fd]                        # EOF: the device was unregistered
+                        break
+                    for off in range(0, len(raw) - size + 1, size):
+                        _sec, _usec, ev_type, code, value = struct.unpack_from("llHHi", raw, off)
+                        if ev_type == e.EV_KEY and value == 1:
+                            print(json.dumps({"code": code}), flush=True)   # one JSON object per press edge
+            if not fds:
+                break
+    finally:
+        for fd in list(fds):
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+    _fail("all input nodes vanished mid-capture", 1)
 
 
 # --- service ------------------------------------------------------------------------
@@ -510,6 +613,7 @@ COMMANDS = {
     "apply-config": (cmd_apply_config, 0),
     "logs": (cmd_logs, 0),
     "devices": (cmd_devices, 0),
+    "capture": (cmd_capture, 1),
     "service": (cmd_service, 1),
     "preset": (cmd_preset, 1),
     "daemon-reload": (cmd_daemon_reload, 0),

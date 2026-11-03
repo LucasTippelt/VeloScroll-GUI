@@ -6,8 +6,8 @@ SCROLL_BTN/SCROLL_BTN_H/DISABLED_BTN appears exactly as pressed while the servic
 
 Those three configured codes are swallowed by the daemon and never reach the virtual node. When
 a target field still holds such a code (e.g. re-capturing the current DISABLED_BTN), the dialog
-says so and offers [Stop daemon & capture directly]: `priv.py service stop`, listen on the
-device's physical node(s) instead, then `priv.py service start` again — issued on every close /
+says so and offers [Stop daemon & capture directly]: stop the veloscroll service via the helper,
+listen on the device's physical node(s) instead, then start it again — issued on every close /
 cancel path once we are the ones who stopped it.
 
 When no device is grabbed yet there is no virtual node at all; the dialog listens on physical
@@ -15,15 +15,22 @@ nodes directly without touching the service (the nodes are readable ungrabbed). 
 in the list only SELECTS it: [Save] writes it into the shared edit buffer via ConfigTab.set_key_raw,
 [Apply] commits config.ini now with the selection included (same privileged path as the tab's Apply),
 and Close discards an unsaved selection without writing anything.
-"""
-import select
 
-from PySide6.QtCore import Qt, QThread, QTimer, Signal
+The listening itself runs through the helper service's StartCapture (root, polkit-gated per start) —
+strictly read-only by design (nodes are opened O_RDONLY and never written to, so no injection is
+possible): press edges arrive as PressEvent signals until the stream ends (all nodes vanished or its
+1 h cap), at which point [Refresh source] starts a new one. Source detection uses in-process
+enumeration as a fast path only when the user has direct /dev/input access; otherwise it falls back
+to root (`Devices` over D-Bus), so none of this needs input-group membership — just the helper service.
+"""
+import json
+
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (QDialog, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
                                QPushButton, QVBoxLayout)
 
 from .devices import enumerate_local, virtual_name
-from .proc import PrivError, PrivJob
+from .proc import PrivError, PrivJob, CaptureThread
 from .values import resolve as resolve_values
 
 CAPTURE_KEYS = ("SCROLL_BTN", "DISABLED_BTN", "SCROLL_BTN_H")
@@ -45,108 +52,14 @@ def code_name(code):
     return _CODES_BY_NAME.get(code, f"code {code}")
 
 
-def find_virtual_node():
-    """Path of the daemon's virtual output node among /dev/input/event*, else None (no grab yet)."""
-    vname = virtual_name()
-    devices, _complete = enumerate_local()
-    for dev in devices:
-        if dev["name"] == vname:
-            return dev["path"]
-    return None
-
-
-def physical_node_paths(state):
-    """Physical nodes to listen on when the virtual one is unavailable.
-
-    The grabbed device(s)' own node(s) from the state file; when there is no state data, every
-    readable non-virtual event node — any of them may be the user's mouse."""
-    if isinstance(state, dict):
-        paths = [d.get("path") for d in (state.get("devices_grabbed") or []) if d.get("path")]
-        if paths:
-            return paths
-    vname = virtual_name()
-    devices, _complete = enumerate_local()
-    return [dev["path"] for dev in devices if dev["name"] != vname]
-
-
-class CaptureThread(QThread):
-    """Reads EV_KEY press edges (value == 1) from one or more /dev/input nodes off the GUI thread.
-
-    BTN_LEFT is dropped: assigning a code IS a left click in this dialog, so capturing it would flood
-    the list with UI noise on every assignment. One select() over every node's fd with a short timeout,
-    draining each readable node with the non-blocking read_one() — so a hot mouse and a quiet keyboard
-    share one loop without blocking."""
-
-    pressed = Signal(int)      # key code of a press edge (repeats are value == 2 and ignored)
-    failed = Signal(str)       # could not open any node / all vanished mid-capture
-
-    def __init__(self, paths, parent=None):
-        super().__init__(parent)
-        self._paths = list(paths)
-        self._stop = False
-
-    def stop(self):
-        """Ask for shutdown and wait briefly; the select timeout bounds how long this can take."""
-        self._stop = True
-        self.wait(1500)
-
-    def run(self):
-        try:
-            import evdev
-            from evdev import ecodes as e
-        except ImportError as exc:
-            self.failed.emit(f"cannot import evdev (is python3-evdev installed?): {exc}")
-            return
-        devs = []
-        errors = []
-        for p in self._paths:
-            try:
-                devs.append(evdev.InputDevice(p))
-            except OSError as exc:
-                errors.append(f"{p}: {exc.strerror or exc}")
-        if not devs:
-            detail = "; ".join(errors[:3]) or "no candidate nodes"
-            hint = (" (permission denied usually means the user is not in the `input` group — OR this GUI "
-                    "process started before that membership took effect, so its credentials are stale; "
-                    "restart the GUI. See the Permissions panel)" if any("denied" in x for x in errors) else "")
-            self.failed.emit(f"could not open any input node: {detail}{hint}")
-            return
-        try:
-            by_fd = {d.fileno(): d for d in devs}
-            while not self._stop and by_fd:
-                try:
-                    ready, _w, _x = select.select(list(by_fd), [], [], 0.2)
-                except (OSError, ValueError):
-                    break
-                for fd in ready:
-                    dev = by_fd.get(fd)
-                    if dev is None:
-                        continue
-                    while True:
-                        try:
-                            ev = dev.read_one()
-                        except OSError:
-                            del by_fd[fd]          # node vanished mid-capture (unplug / daemon released it)
-                            break
-                        if ev is None:
-                            break
-                        # BTN_LEFT is UI noise here — clicking a code in the list to assign it IS a left click
-                        if ev.type == e.EV_KEY and ev.value == 1 and ev.code != e.BTN_LEFT:
-                            self.pressed.emit(ev.code)
-        finally:
-            for d in devs:
-                try:
-                    d.close()
-                except Exception:
-                    pass
-
-
 class CaptureDialog(QDialog):
     """Per-target capture dialog for one button key (see module docstring).
 
     Non-modal on purpose: the user can press Apply on the tab behind it while captures keep
     arriving. The [Stop daemon & capture directly] flow is a small state machine whose only exit
-    from the stopped state is close/cancel, which always issues `priv.py service start` first."""
+    from the stopped state is close/cancel, which always issues `priv.py service start` first. If the
+    polkit prompt for StartCapture is denied or cancelled, the dialog closes itself — there is nothing
+    to listen on and the user clearly does not want to capture."""
 
     MODE_VIRTUAL = "virtual"      # daemon running — listening on its virtual node
     MODE_DIRECT = "direct"        # no virtual node — physical nodes directly, service untouched
@@ -164,6 +77,8 @@ class CaptureDialog(QDialog):
         self._close_requested = False
         self._thread = None
         self._job = None
+        self._resolving = False       # a root-fallback enumeration (priv.py devices) is in flight
+        self._devices = []            # last resolved device list (in-process or root fallback)
         self._stop_path = []          # physical node(s) captured before the service stop
         self._selected_code = None    # last code clicked in the list — nothing is written until [Save] or [Apply]
 
@@ -219,7 +134,7 @@ class CaptureDialog(QDialog):
         self.btn_apply = QPushButton("Apply")
         self.btn_apply.setToolTip(
             "Write config.ini now with the selected code included, plus any other pending edits — same as "
-            "the tab's Apply (needs the scoped sudoers rule)")
+            "the tab's Apply (goes through the polkit-gated helper service)")
         self.btn_apply.clicked.connect(self._on_apply)
         btn_close = QPushButton("Close")
         btn_close.setDefault(True)
@@ -254,11 +169,70 @@ class CaptureDialog(QDialog):
                 out[v] = key
         return out
 
-    def _start_default(self):
-        """(Re)pick the listening source from scratch: virtual node first, physical direct otherwise."""
-        if self._phase in ("stopping", "restarting"):
+    def _resolve_devices(self, on_ready):
+        """Full device list via the fastest available path — in-process enumeration when it is complete
+        and non-empty (the user has direct /dev/input access), else the root fallback `priv.py devices`.
+
+        Always ends in on_ready(devices, None) with [{"path","name"}, …] (possibly empty), or
+        on_ready([], (kind, detail)) when even the fallback fails."""
+        self._resolving = True
+        devices, complete = enumerate_local()
+        if complete and devices:
+            self._resolving = False
+            on_ready(devices, None)
             return
-        vpath = find_virtual_node()
+        job = PrivJob(["devices"], self)
+
+        def ok(out):
+            try:
+                raw = json.loads(out or "[]")
+                devs = [{"path": d["path"], "name": d["name"]} for d in raw]
+            except (ValueError, KeyError) as exc:
+                on_ready([], ("command_failed", f"unparseable JSON ({exc})"))
+                return
+            on_ready(devs, None)
+
+        def bad(kind, detail):
+            on_ready([], (kind, detail))
+
+        job.finished_ok.connect(ok)
+        job.failed.connect(bad)
+        job.start()
+
+    def _physical_paths(self, state=None):
+        """Physical node(s) to listen on when the virtual one is unavailable — the grabbed device's
+        own path(s) from the state file first (no enumeration needed), else every non-virtual node
+        we know about."""
+        if state is None:
+            state = getattr(self.watcher, "payload", None)
+        if isinstance(state, dict):
+            paths = [d.get("path") for d in (state.get("devices_grabbed") or []) if d.get("path")]
+            if paths:
+                return paths
+        vname = virtual_name()
+        return [d["path"] for d in self._devices if d["name"] != vname]
+
+    def _start_default(self):
+        """(Re)pick the listening source from scratch: virtual node first, physical direct otherwise.
+
+        Source detection is two-stage — in-process when complete and non-empty (direct /dev/input
+        access), else the root fallback; state-file grabbed paths need no enumeration at all."""
+        if self._phase in ("stopping", "restarting") or self._resolving:
+            return
+        self.lbl_status.setText("detecting input nodes…")
+        self._resolve_devices(self._on_sources_resolved)
+
+    def _on_sources_resolved(self, devices, error):
+        self._resolving = False
+        if error is not None:
+            kind, detail = error
+            hint = " — install and start the helper service (see the Permissions panel)" \
+                if kind == PrivError.KIND_SERVICE_MISSING else ""
+            self.lbl_status.setText(f"could not enumerate input nodes ({detail}){hint}")
+            return
+        self._devices = devices
+        vname = virtual_name()
+        vpath = next((d["path"] for d in devices if d["name"] == vname), None)
         if vpath is not None:
             self._mode = CaptureDialog.MODE_VIRTUAL
             self._we_stopped = False
@@ -266,7 +240,7 @@ class CaptureDialog(QDialog):
             self.btn_stop_daemon.setEnabled(True)
             self._start_thread([vpath])
         else:
-            paths = physical_node_paths(getattr(self.watcher, "payload", None))
+            paths = self._physical_paths()
             self._mode = CaptureDialog.MODE_DIRECT
             self._we_stopped = False
             src = ", ".join(paths) if paths else "no readable nodes"
@@ -281,13 +255,15 @@ class CaptureDialog(QDialog):
         t, self._thread = self._thread, None
         if t is not None:
             t.stop()
-            if not t.isRunning():          # a wedged thread must never be deleted out from under itself
+            t.wait(800)          # run() exits within ~200 ms of stop(); never delete a live thread
+            if not t.isRunning():
                 t.deleteLater()
 
     def _start_thread(self, paths):
         self._stop_thread()
         if not paths:
-            self.lbl_status.setText("no input node to listen on — check the Permissions panel (input group)")
+            self.lbl_status.setText(
+                "no input node to listen on — check the Permissions panel (the helper service)")
             return
         self._thread = CaptureThread(paths, self)
         self._thread.pressed.connect(self._on_pressed)
@@ -300,7 +276,7 @@ class CaptureDialog(QDialog):
         if self._phase != "idle" or self._mode != CaptureDialog.MODE_VIRTUAL:
             return
         state = getattr(self.watcher, "payload", None)
-        self._stop_path = physical_node_paths(state)   # grabbed path(s) as the daemon knows them, read BEFORE stopping
+        self._stop_path = self._physical_paths(state)  # grabbed path(s) as the daemon knows them, read BEFORE stopping
         self._phase = "stopping"
         self.btn_stop_daemon.setEnabled(False)
         self._stop_thread()                            # the virtual node goes quiet once the daemon stops anyway
@@ -319,7 +295,8 @@ class CaptureDialog(QDialog):
         self.lbl_source.setText("daemon stopped — listening on the physical node(s) directly; "
                                 "the service restarts when this dialog closes")
         if not self._stop_path:
-            self._stop_path = physical_node_paths(None)   # state is stale now: fall back to a fresh enumeration
+            # no grabbed paths in the state file — derive them from whatever device list we resolved
+            self._stop_path = self._physical_paths()
         if self._close_requested:                         # close was hit while the stop was still in flight —
             self.lbl_status.setText("daemon stopped — restarting…")   # no point listening; go straight to the restart
             self._begin_restart()
@@ -330,13 +307,14 @@ class CaptureDialog(QDialog):
     def _on_stop_failed(self, kind, detail):
         if self._phase != "stopping":
             return
-        hint = " — install the scoped sudoers rule (see the Permissions panel)" \
-            if kind == PrivError.KIND_RULE_MISSING else ""
+        hint = " — install and start the helper service (see the Permissions panel)" \
+            if kind == PrivError.KIND_SERVICE_MISSING else ""
         self._phase = "idle"                            # nothing is in flight anymore; close must work again
         self.btn_stop_daemon.setEnabled(True)          # offer the retry now that we are back on the virtual node
         self._mode = CaptureDialog.MODE_VIRTUAL         # back to where we were: daemon still running
         self.lbl_status.setText(f"could not stop the service ({detail}){hint} — staying on the virtual node")
-        vpath = find_virtual_node()
+        vname = virtual_name()
+        vpath = next((d["path"] for d in self._devices if d["name"] == vname), None)   # from our last resolution
         if vpath is not None:
             self._start_thread([vpath])
         if self._close_requested:                         # nothing was stopped, so a plain close is safe now
@@ -392,9 +370,15 @@ class CaptureDialog(QDialog):
             self.config_tab.set_key_raw(self.key, str(self._selected_code))
         self.config_tab.apply()                          # unchanged privileged path — commits the whole buffer
 
-    def _on_listener_failed(self, detail):
+    def _on_listener_failed(self, kind, detail):
         self._thread = None
-        self.lbl_status.setText(f"listener stopped: {detail}")
+        if kind == PrivError.KIND_NOT_AUTHORIZED:
+            # the polkit prompt was denied or cancelled — the user does not want to capture; go away.
+            # closeEvent handles every state (incl. restarting a daemon we stopped for direct capture).
+            self.close()
+            return
+        # no re-arm by design (the service never restarts a stream) — [Refresh source] starts a new one
+        self.lbl_status.setText(f"listener stopped: {detail} — press [Refresh source] to start again")
 
     # -- swallowed-codes note -----------------------------------------------------------
 
