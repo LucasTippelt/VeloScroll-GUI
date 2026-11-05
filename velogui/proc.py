@@ -100,7 +100,7 @@ def _translate(args, input_text=None):
             raise PrivError(PrivError.KIND_COMMAND_FAILED, "service needs an action (stop | start)")
         return "Service", [rest[0]]
     if cmd == "preset":
-        return "Preset", rest          # list of str -> D-Bus array 'as'
+        return "Preset", [rest]        # one argument: the token list marshals as a D-Bus array 'as'
     if cmd == "daemon-reload":
         return "DaemonReload", []
     if cmd == "update":

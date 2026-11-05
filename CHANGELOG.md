@@ -2,9 +2,14 @@
 
 - polishing GUI layout and feel
 
+# v2.1.1
+
+**GUI-only changes, parity with Daemon v2.Y.Z.**
+- **All preset operations fixed** — save / delete / load / restore all failed on the helper service with `TypeError: Helper.Preset() got multiple values for argument 'reply_ok'`: `_translate` returned the token list flat.
+
 # v2.1.0
 
-**GUI-only changes, parity with Daemon v2.0.X.**
+**GUI-only changes, parity with Daemon v2.Y.Z.**
 - **Amber unsaved-value highlighting** — a field whose edit value differs from what is on disk now tints amber (the same pair as the update buttons and the Backups tab's changed rows), and its tab label tints too via a custom-painted QTabBar, so every page that hosts an unsaved key is visible at a glance. A red validation error always wins over amber; Cancel clears both.
 - **Presets preview** — selecting a preset now shows its keys against the current effective values in a diff table (key | in preset | current) instead of the raw file text: changed rows are highlighted amber with a count of exactly what a load would change, and it re-diffs when the state file changes. The Backups tab's comparison got the same typed treatment — `DEVICE_MATCH` pairs are canonicalized before comparing (the state file stores `[v, p]`, the parser returns `(v, p)`), so an identical match no longer lights up amber.
 - **TICK moved to Status & Config** — the ticker-period key now lives under Misc on the Status & Config page (it sat in Feel on Scroll/Invert); it is not a feel setting, so it sits next to `MAX_BACKUPS` where its tuning hint already pointed.
@@ -16,7 +21,7 @@
 
 # v2.0.2
 
-**GUI-only changes, parity with Daemon v2.0.X**.
+**GUI-only changes, parity with Daemon v2.X.Y**.
 - **Amber update buttons** — [Update daemon…] / [Update GUI…] now light up amber while an update is available for that target (the indicator note has existed since v1.3.3; the button tinting was never committed). Resets to theme default when up to date or the check is unknown; same amber pair as the Backups tab's changed rows — legible under light and dark themes.
 - **Update dialog shows origin's latest commit** — while origin is ahead of local HEAD, the info label gains a `latest on origin: <hash> — <subject>` line (clickable GitHub link) so the dialog says what an update would pull; `current commit:` stays the local head (what is running). The subject comes from a read-only GitHub API call (`ls-remote` carries no subjects, and fetching would write to `.git`); non-GitHub remotes / offline / rate-limited degrade to hash without message.
 - **No link on `current commit`** — the update dialog's "current commit:" line (local head) is plain text again: an unpushed local commit has nothing to point at, and the GitHub link risked misinforming about what an update would actually pull. The `latest on origin:` line keeps its link since it points at a real remote commit.
