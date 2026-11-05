@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """Root-owned D-Bus helper service for the VeloScroll GUI.
 
-Replaces the old `sudo -n helpers/priv.py` path: a long-lived root process on the system bus
-that performs every privileged operation, gated per call by polkit (see org.veloscroll.gui.policy).
-The subject is always the unique bus name of the caller taken from the incoming message — never an
-argument — so no client can act as someone else.
+A long-lived root process on the system bus that performs every privileged operation, gated per call by
+polkit (see org.veloscroll.gui.policy). The subject is always the unique bus name of the caller taken from
+the incoming message — never an argument — so no client can act as someone else.
 
 Bus:      org.veloscroll.gui          (system bus; owned via veloscroll-gui-helper.service)
 Object:   /org/veloscroll/gui/Helper
@@ -13,7 +12,9 @@ Interface org.veloscroll.gui.Helper
 Methods (in -> out):
   Ping()                       -> s        liveness probe for the permissions panel
   ApplyConfig(text)            -> (b, s)   validate with the daemon's own parser + atomic replace of
-                                           /etc/veloscroll/config.ini; (False, reason) on rejection
+                                           /etc/veloscroll/config.ini; (False, reason) on rejection.
+                                           Silent config tier — unless the new text changes the effective
+                                           TICK value, in which case it is gated by the auth_admin tick action
   Logs(n)                      -> s        last n journal lines of the veloscroll service
   Devices()                    -> s        JSON list of every /dev/input/event* node readable as root
   StartCapture(paths[], max_s) -> u        stream EV_KEY press edges from input nodes; returns a stream id.
@@ -21,8 +22,9 @@ Methods (in -> out):
                                            One polkit auth_admin prompt per call.
   StopCapture()                -> s        stop every capture stream (no gate: nuisance-level only)
   Service(action)              -> s        systemctl stop|start veloscroll
-   Preset(ops[])                -> s        strict passthrough to the deployed veloscroll_preset.py in /usr/lib/veloscroll
-                                            (same grammar as the CLI); fail-closed if that copy is missing
+    Preset(ops[])                -> s        strict passthrough to the deployed veloscroll_preset.py in /usr/lib/veloscroll
+                                             (same grammar as the CLI); fail-closed if that copy is missing. Silent config tier — unless a loadall or
+                                             restore would put a different effective TICK into config.ini, then the auth_admin tick action gates it
    DaemonReload()               -> s        systemctl daemon-reload
    Update()                     -> s        one-click daemon update: pull as the checkout owner, re-deploy changed files to
                                             /usr/lib/veloscroll (self-healing pre-v1.4 installs), conditional unit refresh +
@@ -34,10 +36,12 @@ Signals:
   CaptureStopped(stream:i, reason:s)  stream ended (stopped by caller / caller disconnected / all nodes
                                        vanished / max time reached)
 
-Auth tiers (org.veloscroll.gui.policy): read/config/service are `yes` (silent), capture/update are
-`auth_admin` (native polkit prompt every call). Denial, cancellation or a missing agent surface as the
-D-Bus error org.veloscroll.gui.NotAuthorized; any other failure is org.veloscroll.gui.Failed with the
-detail text.
+Auth tiers (org.veloscroll.gui.policy): read/config/service are `yes` (silent); capture/update/tick are
+`auth_admin` (native polkit prompt every call). ApplyConfig and Preset normally run on the silent config
+tier — but a resolver decides per call, read-only and before authorization: when such a write would actually
+change TICK (a different effective tick in the new text, or in a preset loadall / restored backup), it is
+raised to the auth_admin `tick` action instead. Denial, cancellation or a missing agent surface as the D-Bus
+error org.veloscroll.gui.NotAuthorized; any other failure is org.veloscroll.gui.Failed with the detail text.
 
 Threading: the GLib main loop is the only D-Bus I/O thread (dispatch + signal emission). Every method
 body runs in a worker thread — including the polkit CheckAuthorization, which blocks on the auth prompt
@@ -93,8 +97,10 @@ CONFIG_PATH = "/etc/veloscroll/config.ini"
 SERVICE = "veloscroll"
 HELPER_SERVICE_NAME = "veloscroll-gui-helper"   # this service's own unit; op_update_gui restarts it after a redeploy
 REPO_HELPER_PATH = os.path.join(GUI_DIR, "helpers", "helper_service.py")    # source copy (user-owned)
+POLICY_REPO_PATH = os.path.join(GUI_DIR, "org.veloscroll.gui.policy")       # source policy (user-owned); op_update_gui redeploys it when a release changes it
 HELPER_DEPLOY_DIR = "/usr/lib/veloscroll-gui"
 HELPER_DEPLOY_PATH = os.path.join(HELPER_DEPLOY_DIR, "helper_service.py")   # runtime copy — must stay root-owned 755
+POLICY_FILE_PATH = "/usr/share/polkit-1/actions/org.veloscroll.gui.policy"  # installed policy — polkitd watches the directory; no reload needed after a redeploy
 MAX_CONFIG_BYTES = 1024 * 1024   # configs are ~5 KB — a hard cap on the incoming text (cheap defense-in-depth)
 
 BUS_NAME = "org.veloscroll.gui"
@@ -102,10 +108,11 @@ OBJECT_PATH = "/org/veloscroll/gui/Helper"
 HELPER_IFACE = "org.veloscroll.gui.Helper"
 
 ACTION_READ = "org.veloscroll.gui.read"        # Ping / Logs / Devices
-ACTION_CONFIG = "org.veloscroll.gui.config"    # ApplyConfig / Preset
+ACTION_CONFIG = "org.veloscroll.gui.config"    # ApplyConfig / Preset (silent tier — the default for both)
 ACTION_SERVICE = "org.veloscroll.gui.service"  # Service / DaemonReload
 ACTION_CAPTURE = "org.veloscroll.gui.capture"  # StartCapture (auth_admin)
 ACTION_UPDATE = "org.veloscroll.gui.update"    # Update / UpdateGui (auth_admin)
+ACTION_TICK = "org.veloscroll.gui.tick"        # ApplyConfig / Preset when they would actually change TICK (auth_admin, resolved per call)
 
 CAPTURE_CAP_S = 3600   # hard backstop per stream: the GUI re-arms explicitly, this only bounds a leaked one
 
@@ -148,6 +155,9 @@ def authorize(sender, action_id):
         detail = err.splitlines()[0] if err else "unknown error"
         hint = (" — no authentication agent is available in this session (install polkit-gtk-auth "
                 "or your desktop's polkit agent)" if "agent" in err.lower() else "")
+        if not hint and "is not registered" in err:   # PK_ERROR_UNKNOWN_ACTION — the installed policy predates this action
+            hint = (" — the installed policy may be stale (it has no such action) — run [Update GUI…] or reinstall "
+                    f"{os.path.basename(POLICY_FILE_PATH)}")
         raise NotAuthorizedError(f"not authorized for {action_id} ({detail}){hint}")
 
 
@@ -202,6 +212,61 @@ def _validate_text(vs, text):
     if check:
         return None, "config failed validation — " + "; ".join(check)
     return values, None
+
+
+def _read_config_file():
+    """The current config.ini text; "" when missing/unreadable (= the pure code defaults apply)."""
+    try:
+        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+            return f.read()
+    except OSError:
+        return ""
+
+
+def _effective_tick(text):
+    """The TICK value the daemon would run if `text` were config.ini — its [veloscroll] TICK parsed by the
+    daemon's own parser, or the code default when absent/empty. None when it cannot be determined (import or
+    parse failure) — callers then gate conservatively. Read-only: never writes."""
+    try:
+        vs = _daemon_module()
+    except BaseException:
+        return None                                 # missing deploy / a malformed disk config kills the import — undeterminable
+    cp = configparser.ConfigParser(interpolation=None)
+    cp.optionxform = str
+    try:
+        cp.read_string(text if isinstance(text, str) else "")
+    except (configparser.Error, TypeError):
+        return None
+    raw = ""
+    if cp.has_section("veloscroll"):
+        raw = (cp["veloscroll"].get("TICK") or "").strip()
+    if not raw:                                     # absent/empty TICK -> the code default applies
+        return vs._DEFAULTS.get("TICK")
+    try:
+        return vs._parse_ini_value("TICK", raw)     # parsed values, so "0.05" and "0.050" compare equal
+    except Exception:
+        return None                                 # unparseable value — undeterminable (a real write would be rejected anyway)
+
+
+def _apply_config_action(text):
+    """The polkit action for an ApplyConfig call, decided read-only before authorization: the auth_admin tick
+    tier only when a valid new text would actually change the effective TICK value; otherwise the silent config
+    tier (work() re-validates — idempotent). Undeterminable -> gate conservatively (fail closed)."""
+    if len(text.encode("utf-8", "replace")) > MAX_CONFIG_BYTES:
+        return ACTION_CONFIG                        # work() rejects it before any write — no prompt needed
+    try:
+        vs = _daemon_module()
+    except HelperFailed:
+        return ACTION_CONFIG                        # missing deployed daemon copy — work() surfaces that error cleanly, nothing is written
+    except BaseException:
+        return ACTION_TICK                          # undeterminable (e.g. a malformed disk config kills the import) -> gate conservatively
+    if _validate_text(vs, text)[1] is not None:     # rejected text never writes — surface the validation error without a prompt
+        return ACTION_CONFIG
+    new_tick = _effective_tick(text)
+    cur_tick = _effective_tick(_read_config_file())
+    if new_tick is None or cur_tick is None:
+        return ACTION_TICK                          # undeterminable -> gate conservatively (fail closed)
+    return ACTION_TICK if new_tick != cur_tick else ACTION_CONFIG
 
 
 def _backup(path):
@@ -385,6 +450,75 @@ def op_preset(ops):
     if p.returncode != 0:
         raise HelperFailed((p.stderr or "veloscroll_preset.py failed").strip())
     return (p.stdout or "").rstrip("\n")
+
+
+def _preset_action(ops):
+    """The polkit action for a Preset call, decided read-only before authorization: the auth_admin tick tier
+    only when an operation would actually put a different effective TICK into config.ini — a `loadall NAME`
+    whose preset file carries one, or a `restore [BACKUP]` that puts such a backup back over config.ini.
+    Everything else (save/delete/list/backups and the group loads — no group key set contains TICK) stays on
+    the silent config tier; an operation the CLI would reject before any write never prompts either.
+    Undeterminable -> gate conservatively (fail closed)."""
+    ops = [str(o) for o in ops]
+    if not ops:
+        return ACTION_CONFIG                        # op_preset rejects it — no write, no prompt needed
+    first = ops[0]
+    if first in ("list", "backups"):
+        return ACTION_CONFIG                        # read-only commands (op_preset rejects extra args before any write)
+    try:
+        vs, vp = _daemon_module(), _preset_module()
+    except HelperFailed:
+        return ACTION_CONFIG                        # missing deployed copy — op_preset surfaces that error cleanly, nothing is written
+    except BaseException:
+        return ACTION_TICK                          # undeterminable (e.g. a malformed disk config kills the import) -> gate conservatively
+    if first == "restore":
+        ref = ops[1] if len(ops) > 1 else None      # op_preset rejects >2 tokens / bad names before any write
+        try:
+            bak = vp._resolve_backup(vs, ref)       # read-only mirror of the CLI's resolution (listdir + isfile only)
+        except Exception:
+            return ACTION_CONFIG                    # no such backup / ambiguous — the CLI fails before any write
+        target = os.path.join(os.path.dirname(bak), vp.BAK_RE.match(os.path.basename(bak)).group("orig"))
+        if target != os.path.abspath(vs.CONFIG_PATH):
+            return ACTION_CONFIG                    # restoring a preset file never touches config.ini
+        try:
+            with open(bak, "r", encoding="utf-8") as f:
+                bak_tick = _effective_tick(f.read())
+        except OSError:
+            return ACTION_TICK                      # undeterminable -> gate conservatively (fail closed)
+        cur_tick = _effective_tick(_read_config_file())
+        if bak_tick is None or cur_tick is None:
+            return ACTION_TICK                      # undeterminable -> gate conservatively (fail closed)
+        return ACTION_TICK if bak_tick != cur_tick else ACTION_CONFIG
+
+    if len(ops) % 2 != 0:
+        return ACTION_CONFIG                        # op_preset rejects odd arity before any write
+    for i in range(0, len(ops), 2):
+        if ops[i] != "loadall":
+            continue                                # group loads / save / delete never write TICK into config.ini
+        name = ops[i + 1]                           # op_preset fullmatch-validates names before any subprocess runs
+        path = os.path.join(vp._preset_dir(vs.CONFIG_PATH), name + ".ini")
+        if not os.path.isfile(path):
+            continue                                # the CLI fails on this pair before any write — no TICK change from it
+        try:
+            cp = configparser.ConfigParser(interpolation=None)
+            cp.optionxform = str
+            with open(path, "r", encoding="utf-8") as f:
+                cp.read_string(f.read())
+        except (OSError, configparser.Error):
+            continue                                # the CLI fails on this pair before any write — no TICK change from it
+        raw = ""
+        if cp.has_section("veloscroll"):
+            raw = (cp["veloscroll"].get("TICK") or "").strip()
+        if not raw:                                 # absent/empty TICK is never applied by a load
+            continue
+        try:
+            tick = vs._parse_ini_value("TICK", raw)
+        except Exception:
+            continue                                # the CLI's parse fails on this pair before any write — no TICK change from it
+        cur_tick = _effective_tick(_read_config_file())
+        if cur_tick is None or tick != cur_tick:
+            return ACTION_TICK                      # this loadall would rewrite config.ini with a different effective TICK
+    return ACTION_CONFIG                            # no operation in the list can change TICK — silent tier
 
 
 # --- daemon-reload ------------------------------------------------------------------
@@ -631,9 +765,11 @@ def op_update():
 
 
 def op_update_gui():
-    """Update the GUI: `git pull --ff-only` in /opt/veloscroll-gui.
+    """Update the GUI: `git pull --ff-only` in /opt/veloscroll-gui; redeploy the helper (and restart its
+    service) when a release changes it, and reinstall the polkit policy to POLICY_FILE_PATH when one — so a
+    new auth action (e.g. org.veloscroll.gui.tick) is live without any manual step.
 
-    The GUI is not a service — there is nothing to restart here; the GUI's update dialog closes & reopens
+    The GUI is not a service — there is nothing else to restart here; the GUI's update dialog closes & reopens
     the app itself once this succeeds. Same transcript/marker contract as op_update()."""
     t = []
 
@@ -701,6 +837,19 @@ def op_update_gui():
     else:
         add("note: helper unchanged — its running service is left untouched; the GUI instance will now close & "
             "reopen itself with the new code")
+
+    policy_changed = _git(["diff", "--name-only", prev_head, new_head, "--", "org.veloscroll.gui.policy"],
+                          repo_dir=GUI_DIR, timeout=10).stdout.strip()
+    if policy_changed:
+        add(f"$ cp {POLICY_REPO_PATH} -> {POLICY_FILE_PATH}")
+        try:
+            shutil.copy2(POLICY_REPO_PATH, POLICY_FILE_PATH)
+            os.chown(POLICY_FILE_PATH, 0, 0)
+            os.chmod(POLICY_FILE_PATH, 0o644)
+        except OSError as exc:
+            add(f"ERROR: policy deploy failed: {exc}")
+            finish(False, "update pulled code but the policy redeploy failed — reinstall org.veloscroll.gui.policy manually")
+        add("policy reinstalled (polkitd watches /usr/share/polkit-1/actions/ — no reload needed)")
     return finish(True, f"updated {prev_head[:9]} → {new_head[:9]}; closing & reopening the GUI to run the new version")
 
 
@@ -826,16 +975,20 @@ class Helper(dbus.service.Object):
 
     # -- dispatch ---------------------------------------------------------------------
 
-    def _dispatch(self, sender, action_id, work, reply_ok, reply_err):
+    def _dispatch(self, sender, action_id, work, reply_ok, reply_err, action_resolver=None):
         """Run `work` in a worker thread behind the polkit gate (action_id=None skips the gate).
 
-        The gate blocks on the native auth prompt for auth_admin actions; replies are marshalled back
-        onto the GLib loop. Any exception becomes the matching D-Bus error (NotAuthorizedError /
-        HelperFailed via _dbus_error_name, anything else as a generic Python error)."""
+        When `action_resolver` is given it runs first — still in this worker thread, before authorize() — and
+        returns the action_id to gate with; it must stay read-only (the auth decision precedes any mutation)
+        and may raise a call from its default tier up to an auth_admin one (ApplyConfig / Preset -> tick when
+        they would actually change TICK). The gate blocks on the native auth prompt for auth_admin actions;
+        replies are marshalled back onto the GLib loop. Any exception becomes the matching D-Bus error
+        (NotAuthorizedError / HelperFailed via _dbus_error_name, anything else as a generic Python error)."""
         def run():
             try:
                 if action_id is not None:
-                    authorize(sender, action_id)
+                    effective = action_resolver() if action_resolver is not None else action_id
+                    authorize(sender, effective)
                 values = work()
             except Exception as exc:
                 # bind by value: `exc` is deleted when the except block ends (and this lambda runs later, on the GLib loop)
@@ -865,7 +1018,8 @@ class Helper(dbus.service.Object):
     @dbus.service.method(HELPER_IFACE, in_signature="s", out_signature="bs",
                          async_callbacks=("reply_ok", "reply_err"), sender_keyword="sender")
     def ApplyConfig(self, text, reply_ok, reply_err, sender):
-        self._dispatch(sender, ACTION_CONFIG, lambda: apply_config_text(str(text)), reply_ok, reply_err)
+        self._dispatch(sender, ACTION_CONFIG, lambda: apply_config_text(str(text)), reply_ok, reply_err,
+                       action_resolver=lambda: _apply_config_action(str(text)))
 
     @dbus.service.method(HELPER_IFACE, in_signature="i", out_signature="s",
                          async_callbacks=("reply_ok", "reply_err"), sender_keyword="sender")
@@ -908,7 +1062,8 @@ class Helper(dbus.service.Object):
     @dbus.service.method(HELPER_IFACE, in_signature="as", out_signature="s",
                          async_callbacks=("reply_ok", "reply_err"), sender_keyword="sender")
     def Preset(self, ops, reply_ok, reply_err, sender):
-        self._dispatch(sender, ACTION_CONFIG, lambda: (op_preset(list(ops)),), reply_ok, reply_err)
+        self._dispatch(sender, ACTION_CONFIG, lambda: (op_preset(list(ops)),), reply_ok, reply_err,
+                       action_resolver=lambda: _preset_action(list(ops)))
 
     @dbus.service.method(HELPER_IFACE, in_signature="", out_signature="s",
                          async_callbacks=("reply_ok", "reply_err"), sender_keyword="sender")

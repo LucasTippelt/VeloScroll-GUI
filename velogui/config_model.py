@@ -10,7 +10,7 @@ text line-preservingly over the baseline:
 
 Validation mirrors the daemon exactly: per-key parsing goes through
 veloscroll._parse_ini_value and cross-field rules through veloscroll.check_config —
-the GUI blocks inline what priv.py's apply-config gate would reject anyway.
+the GUI blocks inline what the helper's ApplyConfig gate would reject anyway.
 
 `raws[key]` is always the exact text that would be written for that key ("" = unset /
 no line). Nullable keys use "none" when an existing value is cleared, matching the
@@ -69,8 +69,19 @@ RAMP_KEYS = ("DEADZONE_IN", "FULL_IN", "MIN_RATE", "MAX_RATE", "CURVE", "OUT_SMO
 DEVICE_KEYS = ("NAME_MATCH", "DEVICE_MATCH", "DPI", "SCROLL_BTN", "SCROLL_BTN_H", "DISABLED_BTN")
 
 # the feel & scroll-mode fields — edited on the Scroll/Invert tab instead of in the Status & Config table
-SCROLL_INVERT_KEYS = ("INVERT", "INVERT_H", "TICK",
+SCROLL_INVERT_KEYS = ("INVERT", "INVERT_H",
                       "TOGGLE_SCROLL", "TOGGLE_SCROLL_H", "VERTICAL_H", "LEFT_CLICK_RESET")
+
+# which tab hosts each key's row (drives the unsaved-value tab tint): "Status & Config" is everything
+# the other tabs don't take — including STATE_FILE / DISTANCE_FILE, which have no selector rows but are
+# still edit-buffer keys (the GUI forces them on/off at startup/exit); Presets/Backups hold none
+TAB_HOSTS = {
+    "Status & Config": tuple(k for k in ALL_KEYS if k not in SCROLL_INVERT_KEYS and k not in RAMP_KEYS and k not in DEVICE_KEYS),
+    "Scroll/Invert": SCROLL_INVERT_KEYS,
+    "Ramp": RAMP_KEYS,
+    "Device Picker": DEVICE_KEYS,
+    "Presets": (), "Backups": (),   # never dirty — they hold no edit-buffer keys
+}
 
 # unset -> what the runtime uses instead (for the "(falls back to ...)" hints)
 FALLBACK = {
@@ -247,10 +258,15 @@ class ConfigModel(QObject):
 
     # -- rendering / dirty ------------------------------------------------------
 
+    def dirty_keys(self):
+        """The frozenset of keys whose raw differs from the file baseline ("" = absent) — exactly what
+        an Apply would write."""
+        origin = self.origin()
+        return frozenset(k for k in ALL_KEYS if self.raws.get(k, "") != origin.get(k, ""))
+
     def render_text(self):
         """Full text with every raw differing from its file origin applied over the baseline."""
-        origin = _parse_raws(self.baseline_text) or {}
-        updates = {k: self.raws[k] for k in ALL_KEYS if self.raws.get(k, "") != origin.get(k, "")}
+        updates = {k: self.raws[k] for k in self.dirty_keys()}
         if not updates:
             return self.baseline_text
         return _render(self.baseline_text, updates)

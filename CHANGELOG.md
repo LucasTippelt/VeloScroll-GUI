@@ -2,6 +2,18 @@
 
 - polishing GUI layout and feel
 
+# v2.1.0
+
+**GUI-only changes, parity with Daemon v2.0.X.**
+- **Amber unsaved-value highlighting** — a field whose edit value differs from what is on disk now tints amber (the same pair as the update buttons and the Backups tab's changed rows), and its tab label tints too via a custom-painted QTabBar, so every page that hosts an unsaved key is visible at a glance. A red validation error always wins over amber; Cancel clears both.
+- **Presets preview** — selecting a preset now shows its keys against the current effective values in a diff table (key | in preset | current) instead of the raw file text: changed rows are highlighted amber with a count of exactly what a load would change, and it re-diffs when the state file changes. The Backups tab's comparison got the same typed treatment — `DEVICE_MATCH` pairs are canonicalized before comparing (the state file stores `[v, p]`, the parser returns `(v, p)`), so an identical match no longer lights up amber.
+- **TICK moved to Status & Config** — the ticker-period key now lives under Misc on the Status & Config page (it sat in Feel on Scroll/Invert); it is not a feel setting, so it sits next to `MAX_BACKUPS` where its tuning hint already pointed.
+- **Auth tier for TICK writes** — new polkit action `org.veloscroll.gui.tick` (`auth_admin`, native prompt): an apply or a preset loadall/restore that would actually change the effective TICK value is resolved per call, read-only and before authorization, to this action; everything else stays on the silent config tier. A stale installed policy without the action fails closed with a hint pointing at [Update GUI…].
+- **[Update GUI…] redeploys the polkit policy** — when a release changes `org.veloscroll.gui.policy` it is copied to `/usr/share/polkit-1/actions/` (polkitd watches that directory, so no reload is needed) and new auth actions go live without any manual step.
+- **Legacy `helpers/priv.py` removed** — the retired sudo-era helper is gone from the repo along with its last references in comments and log strings (historical changelog entries untouched).
+- **Tighter values-table columns** — the Key / Effective value / Edit columns of every field table (Status & Config, Scroll/Invert, Ramp, Device Picker) now size to what that table actually hosts instead of one-size-fits-all 170/230/320 px: Key fits its longest name, Effective covers the widest common cell text (a tab label or a DEVICE_MATCH pair), and Edit is the widest hosted editor's sizeHint so no widget clips. The freed space goes to the stretching Description column — on the Device Picker tab it was squeezed to ~100 px before. The Ramp tables (no Description column) are capped at their columns' total width instead: they no longer overflow horizontally beside their curves, and the leftover row width goes to the curve plots rather than an empty strip right of the Edit column.
+- **Snappier live updates, smaller window** — state-file polling tightened from 4 Hz to 10 Hz (the dashboard and tray LED react faster), the tray-LED poll from 4 Hz to 20 Hz, and the default window size reduced from 1400×940 to 1150×830.
+
 # v2.0.2
 
 **GUI-only changes, parity with Daemon v2.0.X**.

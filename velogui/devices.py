@@ -2,7 +2,7 @@
 
 Enumeration is in-process first (`evdev.list_devices()` + open each node — only applies when the user
 has direct /dev/input access); any unreadable node (no such access / vanished) triggers the root
-fallback `priv.py devices`, whose JSON list then stands in for it. No input-group membership is
+fallback via the helper service (`Devices()`), whose JSON list then stands in for it. No input-group membership is
 required: without direct access every node is unreadable in-process and the fallback does all of the work.
 The virtual `veloscroll-mouse` output
 node appears in the list, clearly labeled, but cannot be selected — selecting a real device writes

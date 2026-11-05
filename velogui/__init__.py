@@ -2,7 +2,7 @@
 import os
 
 APP_NAME = "VeloScroll"
-VERSION = "2.0.2"   #new scheme since v2.0.0 (see VERSIONING.md): X parity break, Y feature/behavior change in either component, Z bugfix/docs
+VERSION = "2.1.0"   #new scheme since v2.0.0 (see VERSIONING.md): X parity break, Y feature/behavior change in either component, Z bugfix/docs
 
 DAEMON_DIR = "/opt/veloscroll"
 CONFIG_PATH = "/etc/veloscroll/config.ini"
@@ -14,7 +14,7 @@ UNIT_PATH = "/etc/systemd/system/veloscroll.service"
 GUI_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # /opt/veloscroll-gui
 ICON_PATH = os.path.join(GUI_DIR, "velogui", "icon.png")
 
-# privileged helper service (replaces the old sudo -n priv.py path) — the unit executes the DEPLOYED copy;
+# privileged helper service — the unit executes the DEPLOYED copy;
 # helpers/helper_service.py in the repo is source only
 HELPER_SERVICE_PATH = "/usr/lib/veloscroll-gui/helper_service.py"   # runtime copy — must stay root-owned 755
 REPO_HELPER_SOURCE = os.path.join(GUI_DIR, "helpers", "helper_service.py")   # user-owned source; redeployed by Update GUI… when a release changes it

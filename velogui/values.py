@@ -29,7 +29,7 @@ SECTIONS = (
 )
 
 # GUI-owned keys: the GUI persists them in [veloscroll] of config.ini, but they are not daemon keys —
-# the daemon logs an unknown-key warning and ignores them (priv.py's apply-config does too). Their
+# the daemon logs an unknown-key warning and ignores them (the helper's ApplyConfig does too). Their
 # effective value is whatever config.ini says; no state-file/computed dataset ever carries them.
 GUI_KEYS = ("STARTUP_TAB", "TRAY_LED")
 
@@ -147,6 +147,16 @@ def format_value(key, v):
     if isinstance(v, bool):
         return "True" if v else "False"
     return str(v)
+
+
+def canon_value(v):
+    """Canonical form for comparing parsed values across sources: a 2-element int pair (DEVICE_MATCH)
+    as a tuple — the state file stores [vendor, product] while the daemon parser returns (vendor, product),
+    and list != tuple in Python would flag an identical match as changed."""
+    if isinstance(v, (list, tuple)) and len(v) == 2 \
+            and all(isinstance(x, int) and not isinstance(x, bool) for x in v):
+        return tuple(v)
+    return v
 
 
 def build_rows(state):

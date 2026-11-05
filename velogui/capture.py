@@ -57,7 +57,7 @@ class CaptureDialog(QDialog):
 
     Non-modal on purpose: the user can press Apply on the tab behind it while captures keep
     arriving. The [Stop daemon & capture directly] flow is a small state machine whose only exit
-    from the stopped state is close/cancel, which always issues `priv.py service start` first. If the
+    from the stopped state is close/cancel, which always starts the service back up (via the helper) first. If the
     polkit prompt for StartCapture is denied or cancelled, the dialog closes itself — there is nothing
     to listen on and the user clearly does not want to capture."""
 
@@ -77,7 +77,7 @@ class CaptureDialog(QDialog):
         self._close_requested = False
         self._thread = None
         self._job = None
-        self._resolving = False       # a root-fallback enumeration (priv.py devices) is in flight
+        self._resolving = False       # a root-fallback enumeration (helper Devices()) is in flight
         self._devices = []            # last resolved device list (in-process or root fallback)
         self._stop_path = []          # physical node(s) captured before the service stop
         self._selected_code = None    # last code clicked in the list — nothing is written until [Save] or [Apply]
@@ -171,7 +171,7 @@ class CaptureDialog(QDialog):
 
     def _resolve_devices(self, on_ready):
         """Full device list via the fastest available path — in-process enumeration when it is complete
-        and non-empty (the user has direct /dev/input access), else the root fallback `priv.py devices`.
+        and non-empty (the user has direct /dev/input access), else the root fallback via the helper (`Devices()`).
 
         Always ends in on_ready(devices, None) with [{"path","name"}, …] (possibly empty), or
         on_ready([], (kind, detail)) when even the fallback fails."""
@@ -321,7 +321,7 @@ class CaptureDialog(QDialog):
             self.accept()
 
     def _begin_restart(self):
-        """Issue the guaranteed `priv.py service start` and let go of the dialog.
+        """Issue the guaranteed service restart (via the helper) and let go of the dialog.
 
         The only exit from MODE_STOPPED goes through here (plain close/cancel, or a close that
         raced an in-flight stop), so the restart is issued on every path."""

@@ -262,7 +262,7 @@ class UpdateDialog(QDialog):
 
     def _show_updated(self, prev, out):
         """Post-update line: linked prev → new hashes plus a compare link for multi-commit pulls; plain
-        text (no links) when the web base is unknown. `out` is the transcript carrying priv.py's
+        text (no links) when the web base is unknown. `out` is the transcript carrying the helper's
         `updated <prev9> → <new9> (N new commit(s))` line."""
         if not prev or len(prev) < 7:
             return

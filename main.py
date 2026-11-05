@@ -32,6 +32,7 @@ from velogui.permissions_panel import PermissionsPanel  # noqa: E402
 from velogui.presets_tab import PresetsTab       # noqa: E402
 from velogui.ramp_tab import RampTab             # noqa: E402
 from velogui.scroll_tab import ScrollTab         # noqa: E402
+from velogui.tab_bar import _DirtyTabBar         # noqa: E402
 from velogui.state_watcher import StateWatcher   # noqa: E402
 from velogui.tray import TrayIcon                # noqa: E402
 
@@ -42,7 +43,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(f"{APP_NAME} v{VERSION}")
-        self.resize(1400, 940)
+        self.resize(1150, 830)
 
         self.banner = Banner()                 # hidden by default; strip above the page
         self.watcher = StateWatcher()
@@ -64,15 +65,19 @@ class MainWindow(QMainWindow):
         self.tab_scroll = ScrollTab(self.tab_config)
         self.tab_ramp = RampTab(self.tab_config, self.watcher)
         self.tab_device = DeviceTab(self.watcher, self.tab_config)
-        self.tab_presets = PresetsTab()
+        self.tab_presets = PresetsTab(self.watcher)
         self.tab_backups = BackupsTab(self.watcher)
         self.tabs = QTabWidget()
+        # the custom bar (installed before addTab so it hosts every tab) tints the tabs that host unsaved values
+        self.tabs.setTabBar(_DirtyTabBar())
         for page, name in zip((self.tab_config, self.tab_scroll, self.tab_ramp, self.tab_device,
                                self.tab_presets, self.tab_backups), TABS):
             self.tabs.addTab(page, name)
         lay.addWidget(self.tabs, 1)
         self.setCentralWidget(central)
         self.tab_config.dirty_changed.connect(self._on_dirty)
+        self.tab_config.dirty_tabs_changed.connect(
+            lambda names: self.tabs.tabBar().set_dirty({TABS.index(n) for n in names}))
 
         # the Config tab routes its banners through the main window's banner strip — except success
         # notes and transient info (e.g. "waiting for the daemon to reload"), which flash in the bottom

@@ -1,4 +1,4 @@
-"""State-file watcher (250 ms, mtime+size compare), distance-file watcher (polls at the daemon's ticker rate) and service poller (2 s).
+"""State-file watcher (100 ms, mtime+size compare), distance-file watcher (polls at the daemon's ticker rate) and service poller (2 s).
 
 A malformed read keeps the last good payload and raises a rate-limited warning —
 it never crashes the GUI. Flag-off suspicion: the service is observed active AND
@@ -9,7 +9,7 @@ The distance file (daemon key DISTANCE_FILE) is rewritten by the daemon on every
 ticker tick while a scroll session is held — to keep the live curve markers smooth
 it is polled at that same ticker rate: TICK from the state payload sets the poll
 interval (~250 Hz with the default 0.004 s; DISTANCE_FALLBACK_INTERVAL_MS until
-TICK is known) instead of the state file's 4 Hz. It is optional: with the key off
+TICK is known) instead of the state file's 10 Hz. It is optional: with the key off
 the file simply never appears and no distance signal ever fires. Malformed reads
 are retried silently on the next tick (atomic replace makes them near-impossible,
 and a rate-limited status-bar flash at this poll rate would just be noise).
@@ -31,7 +31,7 @@ class StateWatcher(QObject):
     service_changed = Signal(str)       # 'active' / 'inactive' / 'failed' / ...
     flag_off_suspected = Signal()       # service active, no state file for >5 s continuously
 
-    STATE_INTERVAL_MS = 250
+    STATE_INTERVAL_MS = 100
     DISTANCE_FALLBACK_INTERVAL_MS = 30  # used until the daemon's TICK is known from the state file, then the poll rate follows the ticker (the file's rewrite rate)
     SERVICE_INTERVAL_MS = 2000
     FLAG_OFF_DELAY_S = 5.0

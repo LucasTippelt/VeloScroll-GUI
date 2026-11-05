@@ -137,8 +137,10 @@ install needs — device and button selection happen in the GUI after first laun
 
     **Security note — what this does and doesn't do.** The polkit policy (`org.veloscroll.gui.policy`) defines
     two tiers: read-only operations (ping / logs / devices) and config, preset & service management pass for any
-    logged-in user without a prompt; button capture and both updates require an **admin authentication on every
-    start** — the native polkit prompt appears in place of the old passwordless sudo. Button capture opens input
+    logged-in user without a prompt; button capture, both updates, and changing TICK require an **admin
+    authentication on every start** — the native polkit prompt appears in place of the old passwordless sudo.
+    "Changing TICK" means an apply or a preset loadall/restore whose effective TICK value differs from the current
+    one — the helper decides per call before authorizing, so everything else stays silent. Button capture opens input
     nodes **read-only** by design, so nothing can *inject* events through it. The same copy-deploy model covers
     the daemon itself: its unit executes `/usr/lib/veloscroll/veloscroll.py` and this helper runs the preset CLI
     from there too — while both checkouts are user-owned source, so a `git pull` in either repo can never reach

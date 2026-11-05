@@ -53,7 +53,7 @@ delivered). The GUI is not a service, so there is nothing to restart via
 
 ## Scroll/Invert
 
-The **Feel** (`INVERT`, `INVERT_H`, `TICK`) and **Scroll mode** (`TOGGLE_SCROLL`, `TOGGLE_SCROLL_H`,
+The **Feel** (`INVERT`, `INVERT_H`) and **Scroll mode** (`TOGGLE_SCROLL`, `TOGGLE_SCROLL_H`,
 `VERTICAL_H`, `LEFT_CLICK_RESET`) sections, moved here from the Status & Config table — same layout (Key |
 Effective value | Edit | Description), same shared edit buffer, with this tab's own Apply/Cancel bar.
 (The rate/curve/smoothing keys that used to sit in "Feel" live on the [Ramp tab](#ramp) next to their
@@ -141,7 +141,8 @@ same shared edit buffer as everywhere else; each button row carries a **[Capture
 
 Named snapshots of the daemon keys in `/etc/veloscroll/presets/*.ini` — save what you have now, load key
 groups from saved presets, delete ones you no longer need. The list shows name / modified time / key
-count; selecting a row displays its raw file below it.
+count; selecting a row previews its keys against the current effective values on the right — changed rows
+highlighted amber (loading changes exactly those), re-diffed when the state file changes.
 
 - **Save current as…** — snapshots every daemon key except `MAX_BACKUPS`, `STATE_FILE` and `DISTANCE_FILE`
   (per-machine operational state, never part of a preset) into `presets/<name>.ini`. Names may use letters,
@@ -178,7 +179,7 @@ first.
 ## Tray icon
 
 - **Tray icon** (`TRAY_LED`, on by default) — a small dot in your system tray: green while a scroll session
-  is active (the daemon's `active` flag from the state file, re-read at 4 Hz), gray when idle. A single left
+  is active (the daemon's `active` flag from the state file, re-read at 10 Hz), gray when idle. A single left
   click toggles the main window (shows/raises it, or hides it). Turn it off with the `TRAY_LED` checkbox on
   the Status & Config page (GUI section) — it applies live and sticks after Apply. If the session has no
   system tray the icon simply isn't created — nothing else depends on it.
@@ -196,8 +197,8 @@ The page's Permissions group (below the values table) checks, with a copy-paste 
 
 All 30 daemon keys, grouped as in the GUI — the ramp keys are edited on the [Ramp tab](#ramp) next to
 their live curves, Device & buttons (plus `DPI`) on the [Device Picker tab](#device-picker), the Feel &
-Scroll mode sections (`INVERT`, `INVERT_H`, `TICK` and the four scroll-mode flags) on the
-[Scroll/Invert tab](#scrollinvert), and Logging with Misc in the Status & Config table. Plus one GUI-only
+Scroll mode sections (`INVERT`, `INVERT_H` and the four scroll-mode flags) on the
+[Scroll/Invert tab](#scrollinvert), and Logging with Misc (incl. `TICK`) in the Status & Config table. Plus one GUI-only
 key, `STARTUP_TAB` (which tab opens on startup; edited on the [Status & Config page](#status--config) —
 it is not a daemon key, so it never hot-reloads: the daemon ignores it). A non-empty value in
 `/etc/veloscroll/config.ini`
@@ -218,7 +219,6 @@ noted, unset or `none` falls back to the vertical value.
 | `OUT_SMOOTH` | `0..1`: how quickly the rate follows the target. Lower = smoother, higher = snappier. | Lower it if scrolling feels steppy or jumpy. |
 | `INVERT` | `True`/`False`. Flip scroll direction. | Set `true` if your DE has "natural scrolling" enabled. |
 | `INVERT_H` | Horizontal variant of `INVERT` for `SCROLL_BTN_H`. Unset or `none` falls back to the vertical value. | Only if the H axis should be inverted differently than vertical (e.g. natural scrolling on one axis only). |
-| `TICK` | Ticker loop period in seconds; `0.004` s ≈ 250 Hz — how often the scroll rate is recomputed and hi-res events are emitted. | Not a feel setting (that's `OUT_SMOOTH`/`MAX_RATE`). Only lower it if scrolling still looks steppy, at the cost of more CPU. |
 
 ### Horizontal overrides
 
@@ -264,5 +264,6 @@ Used only while `SCROLL_BTN_H` is held; unset or `none` falls back to the vertic
 | Key | Meaning / units | Tuning hint |
 |-----|-----------------|-------------|
 | `MAX_BACKUPS` | How many `.bak-<timestamp>` backups the preset helper and seed script keep per file family. `-1` = unlimited, `N ≥ 1` = keep only the newest N after each run that writes a backup, `0` = backups disabled entirely (existing ones stay untouched). | Hot-reloaded like every other key — each helper run reads the current value. Set `0` if you don't want any `.bak-*` files at all. |
+| `TICK` | Ticker loop period in seconds; `0.004` s ≈ 250 Hz — how often the scroll rate is recomputed and hi-res events are emitted. Changing it requires an admin authentication (the helper raises such a write to the polkit `tick` action); everything else applies silently. | Not a feel setting (that's `OUT_SMOOTH`/`MAX_RATE`). Only lower it if scrolling still looks steppy, at the cost of more CPU. |
 | `STATE_FILE` | `True`/`False`. When true, the daemon writes `/run/veloscroll/state`: a JSON snapshot of all effective values, the grabbed devices and scroll activity (plus reload health) for GUI frontends to read. Off by default — zero overhead when no GUI runs. | Per-machine operational state like `MAX_BACKUPS` — never part of presets; managed by the GUI itself (forced on while it is open, off at exit — no selector row). The shipped unit creates `/run/veloscroll` (`RuntimeDirectory=veloscroll`). See [GUI-managed lifecycle keys in the README](README.md#gui-managed-lifecycle-keys-state_file-distance_file). |
 | `DISTANCE_FILE` | `True`/`False`. When true, the daemon writes a second file, `/run/veloscroll/distance`: the live per-axis distances (vertical + horizontal) and smoothed rate of the active scroll session, rewritten on every ticker tick while a button is held (~250 Hz). This is what drives the Ramp tab's live curve markers — with it off they only follow your mouse. Off by default — zero overhead without a consumer. | Per-machine operational state like `STATE_FILE` — never part of presets; managed by the GUI itself (forced on while open when the Ramp tab checkbox is checked, always off at exit — no selector row). The same unit creates `/run/veloscroll` for this file too. See [GUI-managed lifecycle keys in the README](README.md#gui-managed-lifecycle-keys-state_file-distance_file). |

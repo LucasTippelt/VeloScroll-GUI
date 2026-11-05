@@ -253,7 +253,7 @@ def _signal_receiver():
 
 
 class CaptureThread(QThread):
-    """One capture stream off the GUI thread (D-Bus based; replaces the old `priv.py capture` process).
+    """One capture stream off the GUI thread (D-Bus based).
 
     run() issues StartCapture (blocking — for auth_admin this is where the native polkit prompt appears),
     then waits until the service reports that exact stream stopped via CaptureStopped, or stop() is called.

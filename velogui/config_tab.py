@@ -22,10 +22,10 @@ row in this page's table; the daemon ignores the key itself.
 - Nullable *_H / button / device fields show their effective fallback when unset;
   clearing an existing value writes explicit `none`.
 - Validation mirrors the daemon inline (per-key parse + check_config cross-checks) and
-  blocks Apply; priv.py re-validates with the same parser as defense-in-depth.
-- Apply runs in a worker thread via priv.py apply-config; after success the reload is
+  blocks Apply; the helper service re-validates with the same parser as defense-in-depth.
+- Apply runs in a worker thread via the helper's ApplyConfig; after success the reload is
   confirmed from the state file (~2 s when STATE_FILE is on) or, without one, from the
-  journal (priv.py logs) — banner flips to success/failure accordingly.
+  journal (helper logs) — banner flips to success/failure accordingly.
 - Cancel restores the editor from memory and, when a change was already applied, writes
   the previous text back through the same privileged path so the daemon reloads it.
 """
@@ -42,7 +42,8 @@ from . import BUS_NAME, CONFIG_PATH, TABS
 from . import values as vmod
 from .apply_bar import ApplyBar
 from .capture import CaptureDialog
-from .config_model import FALLBACK, GUI_KEYS, KEY_KINDS, NULLABLE, RAMP_KEYS, _render, ConfigModel
+from .config_model import (FALLBACK, GUI_KEYS, KEY_KINDS, NULLABLE, RAMP_KEYS, TAB_HOSTS, _render,
+                           ConfigModel)
 from .errors import popup_error
 from .permissions_panel import PermissionsPanel, SERVICE_FIX
 from .proc import PrivError, PrivJob, run_priv
@@ -51,6 +52,7 @@ from .update_dialog import UpdateDialog
 
 _SERVICE_COLORS = {"active": "#16a34a", "failed": "#dc2626"}
 _UPDATE_BTN_AMBER = "background-color: #fef3c7; color: #1f2937;"   # update-button tint while an update is available — same pair as backups_tab's CHANGED_BG/CHANGED_FG, legible under light AND dark themes
+AMBER_STYLE = "background-color: #fef3c7; color: #1f2937;"         # unsaved-value tint for a field editor (and its tab label) — the same amber pair
 
 # (title, static hint) per key — the short form of config.ini.example's comments
 TITLES = {
@@ -93,8 +95,12 @@ SECTIONS = (   # display order per plan, minus SCROLL_INVERT_KEYS (Scroll/Invert
               # (no selector rows — forced on while open, off at exit): gui / logging / misc
     ("GUI", ("STARTUP_TAB", "TRAY_LED")),
     ("Logging", ("LOG_LEVEL", "LATENCY_LOG")),
-    ("Misc", ("MAX_BACKUPS",)),
+    ("Misc", ("MAX_BACKUPS", "TICK")),
 )
+
+# this page's rows plus the two row-less lifecycle keys must be exactly what TAB_HOSTS assigns to it —
+# a key added to one side and not the other would tint (or fail to tint) the wrong tab
+assert {k for _, ks in SECTIONS for k in ks} | {"STATE_FILE", "DISTANCE_FILE"} == set(TAB_HOSTS["Status & Config"])
 
 # float spin-box geometry per key: (decimals, min, max, step)
 FLOAT_GEOM = {
@@ -245,13 +251,19 @@ class _FieldRow(QWidget):
         else:                                            # text field: keep the file's own formatting when present
             e.blockSignals(True); e.setText(raw if raw is not None else ""); e.blockSignals(False)
 
-    def set_state(self, error="", dynamic_hint=None):
-        """error (red border + red label) wins over any hint; otherwise show the effective-fallback
-        note for unset nullable keys or the static default hint."""
+    def set_state(self, error="", dynamic_hint=None, dirty=False):
+        """error (red border + red label) wins over any hint; otherwise an unsaved value tints only the
+        editor amber (never the btn-key container — the [Capture…] button stays unstyled); else show the
+        effective-fallback note for unset nullable keys or the static default hint."""
         if error:
             self.editor.setStyleSheet(RED_BORDER)
             self.hint.setText(error)
             self.hint.setStyleSheet("color: #dc2626;")
+        elif dirty:
+            self.editor.setStyleSheet(AMBER_STYLE)
+            text = dynamic_hint if dynamic_hint is not None else self._hint_default
+            self.hint.setText(text)
+            self.hint.setStyleSheet("")    # palette default text color (theme-safe)
         else:
             self.editor.setStyleSheet(OK_BORDER)
             text = dynamic_hint if dynamic_hint is not None else self._hint_default
@@ -261,6 +273,7 @@ class _FieldRow(QWidget):
 
 class ConfigTab(QWidget):
     dirty_changed = Signal(bool)
+    dirty_tabs_changed = Signal(set)   # the TAB_HOSTS names hosting at least one unsaved value
 
     CONFIRM_TIMEOUT_MS = 10000     # state file should reflect an accepted reload well before this
 
@@ -403,8 +416,9 @@ class ConfigTab(QWidget):
         """A section table with the same layout as this page's main table: Key | Effective value |
         Edit | Description columns (description=False drops the last column — the Ramp tab shows its
         focused field's hint at the bottom instead), one band row per section (same colors), 34 px rows.
-        The edit cells host the shared _FieldRow container/hint widgets and every effective-value cell
-        joins self._eff_items so refresh() keeps it live exactly like the main table's.
+        The fixed columns are sized to what this table actually hosts (see below); the edit cells host
+        the shared _FieldRow container/hint widgets and every effective-value cell joins self._eff_items
+        so refresh() keeps it live exactly like the main table's.
 
         Returns (table, {section name: band item}) — callers may rename a band live (the Ramp tab does)."""
         cols = 4 if description else 3
@@ -413,10 +427,25 @@ class ConfigTab(QWidget):
         tbl.verticalHeader().setVisible(False)
         tbl.setEditTriggers(QTableWidget.NoEditTriggers)   # editing happens through the embedded widgets
         tbl.setSelectionMode(QTableWidget.NoSelection)
-        tbl.horizontalHeader().setStretchLastSection(True)
-        tbl.setColumnWidth(0, 170)
-        tbl.setColumnWidth(1, 230)
-        tbl.setColumnWidth(2, 320)
+        keys = [k for _, ks in sections for k in ks]
+        fm = tbl.fontMetrics()
+        # size the fixed columns to what this table actually hosts instead of one-size-fits-all widths —
+        # most cells (short values, small editors) need far less than 170/230/320 px. Key fits its longest
+        # name; Effective covers the widest common cell text (a STARTUP_TAB tab label or a DEVICE_MATCH pair,
+        # whichever is wider — long free-text paths clip like they always have); Edit is the widest hosted
+        # editor's sizeHint so no widget clips (the tri-state combos and [Capture…] rows lead). The freed
+        # space goes to the Description column when there is one.
+        tbl.setColumnWidth(0, max(fm.horizontalAdvance(k) for k in keys) + 24)
+        eff_w = max(max(fm.horizontalAdvance(t) for t in TABS), fm.horizontalAdvance("0x46d, 0x4093"),
+                    fm.horizontalAdvance("Effective value"))
+        tbl.setColumnWidth(1, eff_w + 24)
+        tbl.setColumnWidth(2, max(self.rows[k].container.sizeHint().width() for k in keys) + 20)
+        # only the Description column stretches — with no Description (Ramp), stretching would balloon Edit
+        tbl.horizontalHeader().setStretchLastSection(description)
+        if not description:
+            # nothing in-table to absorb the slack, so cap the table at its columns' total width: the grid's
+            # leftover then goes to the neighboring curve plot instead of an empty strip right of the Edit column
+            tbl.setMaximumWidth(sum(tbl.columnWidth(c) for c in range(cols)) + 2 * tbl.frameWidth() + 4)
         tbl.verticalHeader().setDefaultSectionSize(34)
         bands = {}
         for name, keys in sections:
@@ -704,13 +733,14 @@ class ConfigTab(QWidget):
 
     def _refresh_validation(self):
         values, field_errors, form_errors = self.model.validate()
+        dirty_set = self.model.dirty_keys()  # per-key unsaved state — tints the editors and their tabs
         for key, row in self.rows.items():
             dyn = None                       # unset nullable keys show their effective fallback
             if key in NULLABLE and self.model.values.get(key) is None:
                 label, source_key = FALLBACK[key]
                 ref = self.model.values.get(source_key) if source_key else None
                 dyn = f"(unset — {label}" + (f": {ref})" if ref is not None else ")")
-            row.set_state(field_errors.get(key, ""), dyn)
+            row.set_state(field_errors.get(key, ""), dyn, dirty=key in dirty_set)
         if "*" in field_errors:              # file-level syntax error from the initial load
             text = field_errors["*"]
         elif form_errors:
@@ -723,6 +753,7 @@ class ConfigTab(QWidget):
         for bar in self._bars:               # every tab sees the same state (the buffer is one)
             bar.set_state(text, dirty)
         self.dirty_changed.emit(dirty)
+        self.dirty_tabs_changed.emit({name for name, keys in TAB_HOSTS.items() if any(k in dirty_set for k in keys)})
 
     # -- Apply --------------------------------------------------------------------
 
@@ -740,11 +771,11 @@ class ConfigTab(QWidget):
         if text == self.disk_text:
             self._banner("no changes to apply", "success")
             return
-        # the config text goes over stdin — priv.py never opens a caller-chosen path as root
+        # the config text travels as the D-Bus argument itself — the helper never opens a caller-chosen path
         self._set_busy(True, "Applying…")
         self._pending = (text, values)
         job = PrivJob(["apply-config"], self, input_text=text)
-        job.finished_ok.connect(self._on_apply_done)      # Signal(str): priv.py stdout
+        job.finished_ok.connect(self._on_apply_done)      # Signal(str): helper output
         job.failed.connect(self._on_priv_fail)            # Signal(str, str): (kind, detail)
         job.start()
 
@@ -860,7 +891,7 @@ class ConfigTab(QWidget):
         if self.pre_apply_text is not None and self.pre_apply_text != self.disk_text:
             # a change was applied earlier in this session — write the previous text back so the daemon reloads it
             prev = self.pre_apply_text
-            # the previous text goes over stdin — priv.py never opens a caller-chosen path as root
+            # the previous text travels as the D-Bus argument itself — the helper never opens a caller-chosen path
             self._set_busy(True, "Reverting…")
             self._pending = (prev, None)
 
@@ -884,7 +915,7 @@ class ConfigTab(QWidget):
                     self._banner("reverted — daemon is not running; previous config takes effect at its next start", "success")
 
             job = PrivJob(["apply-config"], self, input_text=prev)
-            job.finished_ok.connect(_on_revert_done)   # Signal(str): priv.py stdout
+            job.finished_ok.connect(_on_revert_done)   # Signal(str): helper output
             job.failed.connect(self._on_priv_fail)     # Signal(str, str): (kind, detail) — shared with Apply
             job.start()
         else:

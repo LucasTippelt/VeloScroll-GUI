@@ -40,7 +40,7 @@ class TrayIcon(QObject):
         super().__init__()
         self._window = window
         self._watcher = watcher
-        # TRAY_LED (GUI-only key): the getter returns the edit-buffer value; polled at 4 Hz so an edit or
+        # TRAY_LED (GUI-only key): the getter returns the edit-buffer value; polled at 20 Hz so an edit or
         # Cancel takes effect without any other wiring. None -> no polling (tests / standalone use).
         self._enabled_getter = enabled_getter
         # None = "not yet applied": QSystemTrayIcon is hidden until shown, and start() calls set_enabled
@@ -56,7 +56,7 @@ class TrayIcon(QObject):
         self.icon.activated.connect(self._on_activated)
         self._active = False
         t = QTimer(self)
-        t.setInterval(250)                      # 4 Hz (see module docstring for why this is enough)
+        t.setInterval(50)                      # 20 Hz (see module docstring for why this is enough)
         t.timeout.connect(self._tick)
         t.start()
 
@@ -77,7 +77,7 @@ class TrayIcon(QObject):
             try:
                 self.set_enabled(self._enabled_getter())
             except Exception:
-                pass                            # a getter failure must never kill the 4 Hz tick
+                pass                            # a getter failure must never kill the 20 Hz tick
         p = self._watcher.payload
         active = bool(p.get("active")) if isinstance(p, dict) else False
         if active != self._active:

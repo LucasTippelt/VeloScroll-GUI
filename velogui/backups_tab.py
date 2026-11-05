@@ -3,8 +3,8 @@
 The daemon's save/load commands back up the file they overwrite (pruned per MAX_BACKUPS); this tab
 lists every well-formed backup in /etc/veloscroll/ and its presets/ subdir, parsed in-process (the
 files are world-readable). Selecting a row shows its full key→value preview next to the current
-effective values — changed keys highlighted. [Restore] confirms, then runs `priv.py preset restore`
-with an explicit relative path (unambiguous even when two backups share a basename); restoring a
+effective values — changed keys highlighted. [Restore] confirms, then runs a `preset restore` through the
+helper service with an explicit relative path (unambiguous even when two backups share a basename); restoring a
 config.ini backup makes the daemon hot-reload it within ~2 s.
 """
 import configparser
@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (QHBoxLayout, QHeaderView, QLabel, QMessageBox, QP
 
 from . import CONFIG_PATH
 from .proc import PrivError, PrivJob
-from .values import _daemon_module, format_value, resolve
+from .values import _daemon_module, canon_value, format_value, resolve
 
 # Must stay in sync with veloscroll_preset.BAK_RE — the exact shape _backup() writes.
 BAK_RE = re.compile(r"^(?P<orig>.+)\.bak-(?P<ts>\d{8}-\d{6}\d{6})$")
@@ -212,7 +212,9 @@ class BackupsTab(QWidget):
         for i, (key, raw) in enumerate(sorted(keys.items())):
             typed, ok = _typed(mod, key, raw) if values is not None else (None, False)
             cur_text = format_value(key, values.get(key)) if values is not None else "—"
-            changed = ok and values is not None and typed != values.get(key)
+            # canon both sides: a DEVICE_MATCH pair parses to (v, p) but the state file carries [v, p] —
+            # without this an identical match would compare unequal and light up amber
+            changed = ok and values is not None and canon_value(typed) != canon_value(values.get(key))
             self.tbl_diff.setItem(i, 0, QTableWidgetItem(key))
             item_b = QTableWidgetItem(raw.strip())
             if not ok:

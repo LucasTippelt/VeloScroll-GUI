@@ -40,8 +40,9 @@ class DeviceTab(QWidget):
         # widgets and keeps the effective-value cells live through its refresh cycle. The button rows'
         # [Capture…] buttons sit in their Edit cell like any other editor.
         self.tbl_device, _bands = config_tab.make_section_table(DEVICE_SECTIONS)
-        # the table's fixed columns (Key/Effective/Edit ≈ 720 px) need most of the row — give it the wider
-        # share so its Description column keeps real width instead of being squeezed by the picker side
+        # the table's content-sized Key/Effective/Edit columns still need most of the row (≈ 470 px here) —
+        # give it the wider share so its Description column keeps real width instead of being squeezed by
+        # the picker side
         body.addWidget(self.tbl_device, 6)
 
         self.picker = DevicePicker(config_tab.model, watcher, config_tab.set_key_raw)

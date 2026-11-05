@@ -12,7 +12,7 @@ from .apply_bar import ApplyBar
 from .config_model import SCROLL_INVERT_KEYS
 
 SCROLL_SECTIONS = (   # must stay in sync with config_model.SCROLL_INVERT_KEYS
-    ("Feel", ("INVERT", "INVERT_H", "TICK")),
+    ("Feel", ("INVERT", "INVERT_H")),
     ("Scroll mode", ("TOGGLE_SCROLL", "TOGGLE_SCROLL_H", "VERTICAL_H", "LEFT_CLICK_RESET")),
 )
 assert tuple(k for _, keys in SCROLL_SECTIONS for k in keys) == SCROLL_INVERT_KEYS
