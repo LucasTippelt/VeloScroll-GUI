@@ -155,9 +155,11 @@ highlighted amber (loading changes exactly those), re-diffed when the state file
   `DPI`), scroll (`loadscroll`: the four scroll-mode flags), plus `all` (`loadall` — everything present
   except the button & device groups). The groups exist so a shared feel preset can't silently change
   another machine's physical distances or button bindings; keys outside a group are never applied by it.
-  Checked rows run as a single command, top to bottom (each row may name its own preset); the exact
-  command is shown for confirmation before anything runs. A load writes `config.ini` directly — the daemon
-  hot-reloads within ~2 s and the edit buffer resyncs automatically on the next refresh.
+   Checked rows run as a single command, top to bottom (each row may name its own preset); the exact
+   command is shown for confirmation before anything runs. Below [Load selected…] that same command is also
+   shown live in a read-only field (`sudo /usr/lib/veloscroll/veloscroll_preset.py …`) with a [Copy] button,
+   so it can be copy-pasted into a terminal or keyboard-shortcut automation. A load writes `config.ini`
+   directly — the daemon hot-reloads within ~2 s and the edit buffer resyncs automatically on the next refresh.
 - **Delete selected…** — removes the preset picked in the list after a confirm/cancel popup (Cancel is the
   default). Its `.bak-*` backups are kept and can be put back from the [Backups tab](#backups).
 - The transcript pane keeps the output of every operation; **[Refresh list]** re-scans the directory

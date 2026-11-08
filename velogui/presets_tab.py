@@ -21,7 +21,7 @@ import time
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QBrush, QColor
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QGroupBox, QHBoxLayout, QHeaderView, QLabel,
+from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QGroupBox, QHBoxLayout, QHeaderView, QLabel,
                                 QLineEdit, QMessageBox, QPlainTextEdit, QPushButton, QTableWidget,
                                 QTableWidgetItem, QVBoxLayout, QWidget)
 
@@ -33,6 +33,9 @@ from .values import _daemon_module, canon_value, format_value, resolve
 NAME_RE = re.compile(r"[A-Za-z0-9._-]+")
 
 PRESET_DIR = os.path.join(os.path.dirname(CONFIG_PATH), "presets")   # /etc/veloscroll/presets
+
+# Must stay in sync with the helper's DEPLOY_DIR (helpers/helper_service.py:87) — the deployed CLI is root-owned 755.
+PRESET_CLI = "/usr/lib/veloscroll/veloscroll_preset.py"
 
 # display label -> CLI command; row order == application order (the CLI applies pairs in the given order)
 GROUPS = (
@@ -148,6 +151,22 @@ class PresetsTab(QWidget):
         btn_load.setToolTip("Shows the exact command for confirmation, then runs it as root")
         btn_load.clicked.connect(self._on_load)
         grid_lay.addWidget(btn_load)
+
+        cmd_row = QHBoxLayout()
+        self.ed_cmd = QLineEdit()
+        self.ed_cmd.setReadOnly(True)
+        self.ed_cmd.setPlaceholderText("tick groups above — the command to run appears here")
+        self.btn_copy = QPushButton("Copy")
+        self.btn_copy.setToolTip("Copy the command to the clipboard")
+        self.btn_copy.setEnabled(False)
+        self.btn_copy.clicked.connect(self._on_copy)
+        cmd_row.addWidget(self.ed_cmd, 1)
+        cmd_row.addWidget(self.btn_copy)
+        grid_lay.addLayout(cmd_row)
+
+        for cb, combo in self._rows:                       # live-update on every toggle / combo change
+            cb.toggled.connect(self._update_cmdline)
+            combo.currentTextChanged.connect(self._update_cmdline)
         left.addWidget(load_box)
 
         save_row = QHBoxLayout()
@@ -240,6 +259,7 @@ class PresetsTab(QWidget):
             self._build_preview()                       # selectRow alone does not re-fire when the selection is unchanged
         else:                                           # pruned away between scans — nothing left to preview
             self._clear_preview()
+        self._update_cmdline()                          # combos were refilled with signals blocked — resync the field
 
     def _selected_name(self):
         rows = self.tbl_presets.selectionModel().selectedRows()
@@ -361,6 +381,20 @@ class PresetsTab(QWidget):
                 return None
             ops.append(("loadall", name))
         return ops or None
+
+    def _update_cmdline(self):
+        """Live-show the exact CLI invocation [Load selected…] would run; empty when it would refuse."""
+        ops = self._build_ops()
+        if ops is None:
+            self.ed_cmd.clear()
+            self.btn_copy.setEnabled(False)
+            return
+        tokens = [t for pair in ops for t in pair]
+        self.ed_cmd.setText("sudo " + PRESET_CLI + " " + " ".join(tokens))
+        self.btn_copy.setEnabled(True)
+
+    def _on_copy(self):
+        QApplication.clipboard().setText(self.ed_cmd.text())
 
     def _on_load(self):
         if self._job is not None and self._job.isRunning():

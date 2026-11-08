@@ -2,6 +2,10 @@
 
 - polishing GUI layout and feel
 
+# v2.2.1
+
+- **Presets tab: live command field** — below [Load selected…] a read-only one-line field now shows the exact shell command for the checked rows (`sudo /usr/lib/veloscroll/veloscroll_preset.py …`) as they change, with a [Copy] button to paste it into a terminal or keyboard-shortcut automation.
+
 # v2.2.0
 
 **Consumes the `bypass` field added in daemon v2.1.0 (Scroll Bypass latch).**
