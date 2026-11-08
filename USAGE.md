@@ -178,8 +178,9 @@ first.
 
 ## Tray icon
 
-- **Tray icon** (`TRAY_LED`, on by default) — a small dot in your system tray: green while a scroll session
-  is active (the daemon's `active` flag from the state file, re-read at 10 Hz), gray when idle. A single left
+- **Tray icon** (`TRAY_LED`, on by default) — a small dot in your system tray: red while scroll bypass is
+  latched (the daemon's `bypass` flag from the state file, added in daemon v2.1.0), green while a scroll session
+  is active (the daemon's `active` flag, re-read at 10 Hz), gray when idle. A single left
   click toggles the main window (shows/raises it, or hides it). Turn it off with the `TRAY_LED` checkbox on
   the Status & Config page (GUI section) — it applies live and sticks after Apply. If the session has no
   system tray the icon simply isn't created — nothing else depends on it.
@@ -241,7 +242,7 @@ Used only while `SCROLL_BTN_H` is held; unset or `none` falls back to the vertic
 | `DEVICE_MATCH` | Recommended precise selector for a physical device; overrides `NAME_MATCH`. An exact USB ID pair (`0x46d, 0xc084`) or a stable path string (e.g. `/dev/input/by-id/...`) for two identical mice. | Set it in the GUI's Device Picker tab (its USB ID pair): stable across reboots/ports, and lets per-device pointer rules apply automatically. |
 | `SCROLL_BTN` | Key code of the button to hold for scrolling (evdev name like `BTN_SIDE`, or decimal code, e.g. `275`). | Use the GUI's [Capture…] dialog (or `ListButtonPresses.py` from the daemon repo). Names are `evdev.ecodes.BTN_*`. |
 | `SCROLL_BTN_H` | Optional second button to hold for velocity scrolling. By default horizontal, driven by mouse X movement (emits `REL_HWHEEL`/`REL_HWHEEL_HI_RES`), using the vertical ramp unless overridden by the `_H` keys. With `VERTICAL_H = true` it emits vertical wheel events from up/down movement instead, at the same `_H`-key values. Evdev name or decimal code, or `none` to disable (default). | Must differ from `SCROLL_BTN` and `DISABLED_BTN`. `INVERT` flips both axes (`INVERT_H` overrides it for the H axis). |
-| `DISABLED_BTN` | Key code that is swallowed and does nothing, or `none` to disable this feature. | Set `none` if you don't want to disable a button. |
+| `DISABLED_BTN` | Scroll Bypass latch: key code of a button that toggles bypassing velocity scrolling entirely on/off at runtime (always starts off per daemon start); while ON the scroll buttons behave as normal clicks and movement is unmediated. Or `none` to disable this feature. | The tray icon turns red while latched (requires `STATE_FILE = true`). Set `none` if you don't want a bypass latch. |
 
 ### Scroll mode
 

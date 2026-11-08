@@ -79,7 +79,7 @@ TITLES = {
     "NAME_MATCH": ("NAME_MATCH", "fallback selector: substring of the device name"),
     "DEVICE_MATCH": ("DEVICE_MATCH", "USB pair (0x46d, 0x4093) · stable path · none"),
     "SCROLL_BTN": ("SCROLL_BTN", "evdev name or decimal code; none not allowed"),
-    "DISABLED_BTN": ("DISABLED_BTN", "swallowed button; evdev name/decimal or none"),
+    "DISABLED_BTN": ("DISABLED_BTN", "scroll-bypass latch key — press toggles bypassing velocity scrolling on/off at runtime (always starts off); evdev name/decimal or none"),
     "SCROLL_BTN_H": ("SCROLL_BTN_H", "horizontal hold button; none disables"),
     "LOG_LEVEL": ("LOG_LEVEL", "0..3 — 2 = config detail (reload lines)"),
     "LATENCY_LOG": ("LATENCY_LOG", "per-second latency summary lines"),
@@ -87,7 +87,7 @@ TITLES = {
     "STATE_FILE": ("STATE_FILE", "write /run/veloscroll/state for GUIs (GUI switch)"),
     "DISTANCE_FILE": ("DISTANCE_FILE", "write /run/veloscroll/distance live feed for the curve markers (GUI switch)"),
     "STARTUP_TAB": ("STARTUP_TAB", "tab opened on startup — GUI only, the daemon ignores this key"),
-    "TRAY_LED": ("TRAY_LED", "status-LED tray icon: green while a scroll session is active, gray when idle — GUI only (applies live; the daemon ignores this key)"),
+    "TRAY_LED": ("TRAY_LED", "status-LED tray icon: red while scroll bypass is latched, green while a scroll session is active, gray when idle — GUI only (applies live; the daemon ignores this key)"),
 }
 
 SECTIONS = (   # display order per plan, minus SCROLL_INVERT_KEYS (Scroll/Invert tab), RAMP_KEYS (Ramp tab),
@@ -209,8 +209,11 @@ class _FieldRow(QWidget):
             self.capture_btn = None
             self.container = self.editor
 
-        # no stylesheet: palette default text color (theme-safe black/white); set_state applies red on error
+        # no stylesheet: palette default text color (theme-safe black/white); set_state applies red on error.
+        # Word wrap so a long hint (e.g. DISABLED_BTN's scroll-bypass description) wraps to a second line
+        # instead of clipping — the row grows only when needed (34 px default otherwise).
         self.hint = QLabel(hint)
+        self.hint.setWordWrap(True)
         self.hint.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self._hint_default = hint
 

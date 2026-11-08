@@ -91,7 +91,7 @@ FALLBACK = {
     "INVERT_H": ("vertical value", "INVERT"),
     "TOGGLE_SCROLL_H": ("vertical value", "TOGGLE_SCROLL"),
     "SCROLL_BTN_H": ("horizontal scrolling disabled", None),
-    "DISABLED_BTN": ("no button is swallowed", None),
+    "DISABLED_BTN": ("scroll bypass disabled", None),
     "DEVICE_MATCH": ("NAME_MATCH selector", "NAME_MATCH"),
 }
 

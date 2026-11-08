@@ -1,10 +1,11 @@
 """Tray icon: a QSystemTrayIcon with runtime-drawn pixmaps — no icon file needed.
 
-Green = an active scroll session (state `active`), gray = idle. The flag is re-read at 4 Hz, the
-same rate as the state-file watcher; since the daemon rewrites the state on every held transition,
-the dot lags a press by at most one write (~250 ms). The pixmap is only redrawn when the flag
-flips. A single left click toggles the main window (show/raise or hide). When no system tray is
-available the icon is simply not created — nothing else in the GUI depends on it."""
+Red = scroll bypass latched (state `bypass`, daemon >= 2.1.0), green = an active scroll session
+(state `active`), gray = idle. The flags are re-read at 4 Hz, the same rate as the state-file
+watcher; since the daemon rewrites the state on every held transition and latch flip, the dot lags
+a press by at most one write (~250 ms). The pixmap is only redrawn when a flag flips. A single
+left click toggles the main window (show/raise or hide). When no system tray is available the icon
+is simply not created — nothing else in the GUI depends on it."""
 
 from PySide6.QtCore import QObject, Qt, QTimer
 from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap
@@ -13,10 +14,11 @@ from PySide6.QtWidgets import QSystemTrayIcon
 from . import APP_NAME
 
 ACTIVE_COLOR = "#16a34a"
+BYPASS_COLOR = "#dc2626"   # same red as the service "failed" dot — an attention state that wins over green
 IDLE_COLOR = "#9ca3af"
 
 
-def _pixmap(active):
+def _pixmap(color):
     """A status-LED dot with a small vertical bar (the scroll motif); drawn at 64 px, the tray scales it down."""
     size = 64
     pm = QPixmap(size, size)
@@ -25,7 +27,7 @@ def _pixmap(active):
     p.setRenderHint(QPainter.Antialiasing)
     m = size * 0.12
     p.setPen(Qt.NoPen)
-    p.setBrush(QColor(ACTIVE_COLOR if active else IDLE_COLOR))
+    p.setBrush(QColor(color))
     p.drawRoundedRect(m, m, size - 2 * m, size - 2 * m, size * 0.30, size * 0.30)
     bw = size * 0.14                            # inner notch: a short vertical bar in white
     x = (size - bw) / 2
@@ -51,10 +53,10 @@ class TrayIcon(QObject):
         if not QSystemTrayIcon.isSystemTrayAvailable():
             return                              # no tray on this session — the GUI works without it
         # Qt 6's QSystemTrayIcon takes a QIcon (setPixmap was removed with the Qt5 API)
-        self.icon = QSystemTrayIcon(QIcon(_pixmap(False)))
+        self.icon = QSystemTrayIcon(QIcon(_pixmap(IDLE_COLOR)))
         self.icon.setToolTip(APP_NAME)
         self.icon.activated.connect(self._on_activated)
-        self._active = False
+        self._state = "idle"                    # "bypass" / "active" / "idle" — the pixmap only redraws on a flip
         t = QTimer(self)
         t.setInterval(50)                      # 20 Hz (see module docstring for why this is enough)
         t.timeout.connect(self._tick)
@@ -80,10 +82,15 @@ class TrayIcon(QObject):
                 pass                            # a getter failure must never kill the 20 Hz tick
         p = self._watcher.payload
         active = bool(p.get("active")) if isinstance(p, dict) else False
-        if active != self._active:
-            self._active = active
-            self.icon.setIcon(QIcon(_pixmap(active)))
-            self.icon.setToolTip(f"{APP_NAME} — scrolling active" if active else APP_NAME)
+        bypass = bool(p.get("bypass")) if isinstance(p, dict) else False   # additive field (daemon >= 2.1.0); older daemons never set it -> gray/green as before
+        state = "bypass" if bypass else ("active" if active else "idle")   # red wins: while latched no session can be engaged anyway
+        if state != self._state:
+            self._state = state
+            color = BYPASS_COLOR if bypass else (ACTIVE_COLOR if active else IDLE_COLOR)
+            self.icon.setIcon(QIcon(_pixmap(color)))
+            tip = {"bypass": f"{APP_NAME} — scroll bypass latched",
+                   "active": f"{APP_NAME} — scrolling active"}.get(state, APP_NAME)
+            self.icon.setToolTip(tip)
 
     def _on_activated(self, reason):
         if reason == QSystemTrayIcon.Trigger:   # single left click toggles; there is no context menu in v1

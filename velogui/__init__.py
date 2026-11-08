@@ -2,7 +2,7 @@
 import os
 
 APP_NAME = "VeloScroll"
-VERSION = "2.1.1"   #new scheme since v2.0.0 (see VERSIONING.md): X parity break, Y feature/behavior change in either component, Z bugfix/docs
+VERSION = "2.2.0"   #new scheme since v2.0.0 (see VERSIONING.md): X parity break, Y feature/behavior change in either component, Z bugfix/docs
 
 DAEMON_DIR = "/opt/veloscroll"
 CONFIG_PATH = "/etc/veloscroll/config.ini"

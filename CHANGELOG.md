@@ -2,6 +2,14 @@
 
 - polishing GUI layout and feel
 
+# v2.2.0
+
+**Consumes the `bypass` field added in daemon v2.1.0 (Scroll Bypass latch).**
+- **Red tray icon while scroll bypass is latched** — the status LED now reads the state document's additive `"bypass"` flag: red while latched, green for an active session as before, gray when idle; the tooltip says "scroll bypass latched". Older daemons (pre-v2.1.0) never set the field, so they keep the old two-color behavior — no breakage.
+- **"Disabled Button" → Scroll Bypass** — the `DISABLED_BTN` row's hint and its unset note now describe the latch (press toggles bypassing velocity scrolling on/off at runtime; while ON the scroll buttons behave as normal clicks), matching the daemon v2.1.0 repurpose of that key. The key name itself is unchanged everywhere, so existing configs work unmodified.
+- Once enough features accumulate or a real parity break occures, Version will be bumped to v3.0.0 and the leftover DISABLED_BTN key will get renamed into SCROLL_BYPASS_BTN which will actually break parity.
+- **Added wrapping for descriptions**
+
 # v2.1.1
 
 **GUI-only changes, parity with Daemon v2.Y.Z.**
