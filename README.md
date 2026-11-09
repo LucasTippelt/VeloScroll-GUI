@@ -58,7 +58,7 @@ install needs — device and button selection happen in the GUI after first laun
 
 4. **Deploy the root-executed files, then install and start the systemd service**:
 
-    > **Strongly recommended safety net — do this before enabling the service:** set up [KDE Connect](https://kdeconnect.kde.org/) (or any similar remote-input app/VNC/cheap secondary mouse) on your phone so you can send mouse clicks/movement to your computer *should* VeloScroll ever misbehave and you lose normal mouse control (there are safeguards against this but better to be safe than sorry). It makes fixing whatever went wrong much easier than rebooting blind.
+    > **Strongly recommended safety net — do this before enabling the service:** set up [KDE Connect](https://kdeconnect.kde.org/)  on your phone (or any similar remote-input app/VNC/cheap secondary mouse) so you can send mouse clicks/movement to your computer *should* VeloScroll ever misbehave and you lose normal mouse control (there *are* safeguards against this but better to be safe than sorry). It makes fixing whatever went wrong much easier than rebooting blind.
 
     The unit executes a *deployed* copy in `/usr/lib/veloscroll` (root-owned 755), never the repo — so make
     the checkout user-owned source and deploy it before `enable --now`, otherwise the unit fails to start:
@@ -106,7 +106,7 @@ install needs — device and button selection happen in the GUI after first laun
    package first (Debian/Ubuntu: `sudo apt install python3-venv`).
 
 7. **Privileged helper service** (one-time, needs your password). The GUI performs every privileged operation
-   through a root-owned system-bus D-Bus service gated per call by polkit — no sudo at all:
+   through a root-owned system-bus D-Bus service gated per call by polkit:
 
     The unit executes the *deployed* copy of the helper (`/usr/lib/veloscroll-gui/helper_service.py`), so
     deploy it before `enable --now` — otherwise the unit fails to start:
@@ -122,8 +122,7 @@ install needs — device and button selection happen in the GUI after first laun
     ```
 
     No further setup is needed for the [Update daemon…]/[Update GUI…] buttons: their `git pull` step runs as
-    **the user who owns each checkout** (the service drops privileges per git call), so there is no "dubious
-    ownership" problem and nothing to add to any git config. Only the restart / service-file parts of a daemon
+    **the user who owns each checkout** (the service drops privileges per git call). Only the restart / service-file parts of a daemon
     update run as root, behind the polkit prompt.
 
     **Hardened system buses:** some systems run their bus with name ownership denied by default (each service
@@ -138,19 +137,15 @@ install needs — device and button selection happen in the GUI after first laun
     **Security note — what this does and doesn't do.** The polkit policy (`org.veloscroll.gui.policy`) defines
     two tiers: read-only operations (ping / logs / devices) and config, preset & service management pass for any
     logged-in user without a prompt; button capture, both updates, and changing TICK require an **admin
-    authentication on every start** — the native polkit prompt appears in place of the old passwordless sudo.
+    authentication on every start**.
     "Changing TICK" means an apply or a preset loadall/restore whose effective TICK value differs from the current
     one — the helper decides per call before authorizing, so everything else stays silent. Button capture opens input
     nodes **read-only** by design, so nothing can *inject* events through it. The same copy-deploy model covers
     the daemon itself: its unit executes `/usr/lib/veloscroll/veloscroll.py` and this helper runs the preset CLI
     from there too — while both checkouts are user-owned source, so a `git pull` in either repo can never reach
-    root on its own. Input-group membership is therefore NOT required — if you added it during an earlier setup, remove it:
-
-    ```sh
-    sudo gpasswd -d $USER input    # optional cleanup; the GUI works without it (and with it)
-    ```
-
- 8. **Desktop entry**:
+    root on its own.
+   
+ 9. **Desktop entry**:
 
    ```sh
    mkdir -p ~/.local/share/applications
