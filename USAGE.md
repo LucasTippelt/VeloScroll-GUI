@@ -49,23 +49,30 @@ delivered). The GUI is not a service, so there is nothing to restart via
   instead writes the previous config back through the same privileged path so the daemon reloads it.
   Unsaved changes are marked in every bar and in the window title.
 - External edits to `config.ini` are picked up on the 2 s refresh cycle (your unapplied edits are kept,
-  with a note that Cancel now reverts to your starting point rather than the new file).
+  with a note that Cancel now reverts to your starting point rather than the new file.
+  #### Permissions panel
+
+The Status & Config page's Permissions group (below the values table) checks, with a copy-paste fix for each gap (and [Re-check]):
+
+1. the helper service reachable on the system bus (a D-Bus `Ping`) — it performs every privileged operation, gated per call by polkit: read-only ops and config/preset/service management pass without a prompt, while button capture and both updates raise the native auth prompt on every start (no `input` group needed),
+2. `/etc/veloscroll/config.ini` exists,
+3. unit file present at `/etc/systemd/system/veloscroll.service` and service enabled,
+4. the deployed helper copy `/usr/lib/veloscroll-gui/helper_service.py` **and its directory** root-owned and not user/group-writable — the unit executes *that* copy as root, so a user-writable deployed helper (or its directory, via rename-swap) would be an escalation vector; the repo's `helpers/helper_service.py` is plain source, user-writable by design. [Re-check] surfaces drift of the deployed copy with the redeploy copy-paste fix.
+
 
 ## Scroll/Invert
 
 The **Feel** (`INVERT`, `INVERT_H`) and **Scroll mode** (`TOGGLE_SCROLL`, `TOGGLE_SCROLL_H`,
-`VERTICAL_H`, `LEFT_CLICK_RESET`) sections, moved here from the Status & Config table — same layout (Key |
+`VERTICAL_H`, `LEFT_CLICK_RESET`) sections (Key |
 Effective value | Edit | Description), same shared edit buffer, with this tab's own Apply/Cancel bar.
-(The rate/curve/smoothing keys that used to sit in "Feel" live on the [Ramp tab](#ramp) next to their
-live curves.)
+
 
 ## Ramp
 
 The ramp options next to their live curves: the **Vertical ramp** panel (`DEADZONE_IN`, `FULL_IN`,
 `MIN_RATE`, `MAX_RATE`, `CURVE`, `OUT_SMOOTH`) beside the vertical curve, and the **Horizontal overrides**
 panel (the six `_H` keys) beside the horizontal one. Edits land in the shared edit buffer — nothing is
-applied until you press Apply on this tab's bar. (`DPI` lives on the [Device Picker tab](#device-picker),
-next to the mouse it belongs to.)
+applied until you press Apply on this tab's bar.
 
 - The tables here have no Description column: instead, the last-clicked field's description is shown at
   the bottom left, in the same row as Cancel/Apply — clicking anywhere in a row (its Key / Effective value
@@ -158,7 +165,7 @@ highlighted amber (loading changes exactly those), re-diffed when the state file
    Checked rows run as a single command, top to bottom (each row may name its own preset); the exact
    command is shown for confirmation before anything runs. Below [Load selected…] that same command is also
    shown live in a read-only field (`sudo /usr/lib/veloscroll/veloscroll_preset.py …`) with a [Copy] button,
-   so it can be copy-pasted into a terminal or keyboard-shortcut automation. A load writes `config.ini`
+   so it can be copy-pasted into a terminal or used for keyboard-shortcut automation. A load writes `config.ini`
    directly — the daemon hot-reloads within ~2 s and the edit buffer resyncs automatically on the next refresh.
 - **Delete selected…** — removes the preset picked in the list after a confirm/cancel popup (Cancel is the
   default). Its `.bak-*` backups are kept and can be put back from the [Backups tab](#backups).
@@ -187,86 +194,3 @@ first.
   the Status & Config page (GUI section) — it applies live and sticks after Apply. If the session has no
   system tray the icon simply isn't created — nothing else depends on it.
 
-## Permissions panel
-
-The page's Permissions group (below the values table) checks, with a copy-paste fix for each gap (and [Re-check]):
-
-1. the helper service reachable on the system bus (a D-Bus `Ping`) — it performs every privileged operation, gated per call by polkit: read-only ops and config/preset/service management pass without a prompt, while button capture and both updates raise the native auth prompt on every start (no `input` group needed),
-2. `/etc/veloscroll/config.ini` exists,
-3. unit file present at `/etc/systemd/system/veloscroll.service` and service enabled,
-4. the deployed helper copy `/usr/lib/veloscroll-gui/helper_service.py` **and its directory** root-owned and not user/group-writable — the unit executes *that* copy as root, so a user-writable deployed helper (or its directory, via rename-swap) would be an escalation vector; the repo's `helpers/helper_service.py` is plain source, user-writable by design. [Re-check] surfaces drift of the deployed copy with the redeploy copy-paste fix.
-
-## Config keys (hot-reloaded)
-
-All 30 daemon keys, grouped as in the GUI — the ramp keys are edited on the [Ramp tab](#ramp) next to
-their live curves, Device & buttons (plus `DPI`) on the [Device Picker tab](#device-picker), the Feel &
-Scroll mode sections (`INVERT`, `INVERT_H` and the four scroll-mode flags) on the
-[Scroll/Invert tab](#scrollinvert), and Logging with Misc (incl. `TICK`) in the Status & Config table. Plus one GUI-only
-key, `STARTUP_TAB` (which tab opens on startup; edited on the [Status & Config page](#status--config) —
-it is not a daemon key, so it never hot-reloads: the daemon ignores it). A non-empty value in
-`/etc/veloscroll/config.ini`
-overrides the built-in default; a missing or empty key falls back to it. Edits hot-reload within ~2 s — no
-restart needed (the GUI applies them with one click). Keys with an `_H` suffix are horizontal variants; where
-noted, unset or `none` falls back to the vertical value.
-
-### Feel
-
-| Key | Meaning / units | Tuning hint |
-|-----|-----------------|-------------|
-| `DPI` | Your mouse's current DPI (counts/inch). Converts inches to raw counts. | Set it to your mouse's current DPI setting, not its maximum. |
-| `DEADZONE_IN` | Distance from the press point (inches) below which nothing scrolls. | Raise if scrolling starts before you've moved the mouse at all. |
-| `FULL_IN` | Distance (inches) from the press point where `MAX_RATE` is reached. Must be > `DEADZONE_IN`. | The span over which speed ramps up. |
-| `MAX_RATE` | Scroll rate in notches/second at `FULL_IN` and beyond. | Your top scrolling speed. |
-| `MIN_RATE` | Scroll rate in notches/second just past the deadzone. | The floor of the ramp; keep above 0. |
-| `CURVE` | Shape of the speed ramp: `>1` gentle near the start, `=1` linear, `<1` steep near the start. | Tune feel: `<1` reacts fast to small movements, `>1` is more forgiving. |
-| `OUT_SMOOTH` | `0..1`: how quickly the rate follows the target. Lower = smoother, higher = snappier. | Lower it if scrolling feels steppy or jumpy. |
-| `INVERT` | `True`/`False`. Flip scroll direction. | Set `true` if your DE has "natural scrolling" enabled. |
-| `INVERT_H` | Horizontal variant of `INVERT` for `SCROLL_BTN_H`. Unset or `none` falls back to the vertical value. | Only if the H axis should be inverted differently than vertical (e.g. natural scrolling on one axis only). |
-
-### Horizontal overrides
-
-Used only while `SCROLL_BTN_H` is held; unset or `none` falls back to the vertical value.
-
-| Key | Meaning / units | Tuning hint |
-|-----|-----------------|-------------|
-| `DEADZONE_IN_H` | Horizontal variant of `DEADZONE_IN` (inches). | Only if horizontal scrolling should start at a different distance than vertical. |
-| `FULL_IN_H` | Horizontal variant of `FULL_IN`. Must be greater than the effective horizontal deadzone. | The span over which horizontal speed ramps up. |
-| `MIN_RATE_H` | Horizontal variant of `MIN_RATE` (notches/second). | The floor of the horizontal ramp; keep > 0. |
-| `MAX_RATE_H` | Horizontal variant of `MAX_RATE`. Must be >= the effective horizontal `MIN_RATE`. | Your top horizontal scrolling speed. |
-| `CURVE_H` | Horizontal variant of `CURVE` (ramp shape). | Same semantics as `CURVE`. |
-| `OUT_SMOOTH_H` | Horizontal variant of `OUT_SMOOTH`. | How quickly the horizontal rate follows its target. |
-
-### Device & buttons
-
-| Key | Meaning / units | Tuning hint |
-|-----|-----------------|-------------|
-| `NAME_MATCH` | Case-insensitive substring of your mouse's name that selects it. Used only when `DEVICE_MATCH` is unset (fallback). | Use a short unique fragment from the device list; if any other device shares it, prefer `DEVICE_MATCH`. Recommended for piping another virtual device into VeloScroll. |
-| `DEVICE_MATCH` | Recommended precise selector for a physical device; overrides `NAME_MATCH`. An exact USB ID pair (`0x46d, 0xc084`) or a stable path string (e.g. `/dev/input/by-id/...`) for two identical mice. | Set it in the GUI's Device Picker tab (its USB ID pair): stable across reboots/ports, and lets per-device pointer rules apply automatically. |
-| `SCROLL_BTN` | Key code of the button to hold for scrolling (evdev name like `BTN_SIDE`, or decimal code, e.g. `275`). | Use the GUI's [Capture…] dialog (or `ListButtonPresses.py` from the daemon repo). Names are `evdev.ecodes.BTN_*`. |
-| `SCROLL_BTN_H` | Optional second button to hold for velocity scrolling. By default horizontal, driven by mouse X movement (emits `REL_HWHEEL`/`REL_HWHEEL_HI_RES`), using the vertical ramp unless overridden by the `_H` keys. With `VERTICAL_H = true` it emits vertical wheel events from up/down movement instead, at the same `_H`-key values. Evdev name or decimal code, or `none` to disable (default). | Must differ from `SCROLL_BTN` and `DISABLED_BTN`. `INVERT` flips both axes (`INVERT_H` overrides it for the H axis). |
-| `DISABLED_BTN` | Scroll Bypass latch: key code of a button that toggles bypassing velocity scrolling entirely on/off at runtime (always starts off per daemon start); while ON the scroll buttons behave as normal clicks and movement is unmediated. Or `none` to disable this feature. | The tray icon turns red while latched (requires `STATE_FILE = true`). Set `none` if you don't want a bypass latch. |
-
-### Scroll mode
-
-| Key | Meaning / units | Tuning hint |
-|-----|-----------------|-------------|
-| `TOGGLE_SCROLL` | How `SCROLL_BTN` engages velocity scrolling. `False` (default) = hold-to-scroll, the button must stay pressed. `True` = tap to toggle on, tap again to toggle off (releasing does nothing while toggled). | While toggled on, movement is captured exactly as in hold mode (cursor stays put, same ramp from the tap point). Set `true` if you prefer a latched scroll mode over holding. |
-| `TOGGLE_SCROLL_H` | Horizontal variant of `TOGGLE_SCROLL` for `SCROLL_BTN_H`. Unset or `none` falls back to the vertical value. | Only if horizontal scrolling should use a different engagement mode than vertical (e.g. hold vertically, toggle horizontally). |
-| `VERTICAL_H` | `True`/`False`. With `true`, holding `SCROLL_BTN_H` becomes a second vertical velocity scroll instead of horizontal: mouse up/down movement drives `REL_WHEEL`/`REL_WHEEL_HI_RES` using the horizontal ramp values (`*_H` keys), and left/right movement does nothing. `false` (default) = horizontal behavior. | Only takes effect when `SCROLL_BTN_H` is set. Flipped by `INVERT_H` when set, else by `INVERT`, like every other axis. Flipping it live mid-hold ends any in-progress session. |
-| `LEFT_CLICK_RESET` | `True`/`False`. What releasing the left mouse button does while a scroll session is active: `true` (default) = fresh origin — the next movement scrolls from zero again; `false` = keep the current distance, so scrolling continues at its old speed. | Set `false` if you prefer to click mid-session without losing your scroll position/speed. Velocity output is paused while left is down either way. |
-
-### Logging
-
-| Key | Meaning / units | Tuning hint |
-|-----|-----------------|-------------|
-| `LOG_LEVEL` | What the daemon writes to its log (`journalctl -u veloscroll`). Integer `0..3`, higher = more verbose: `0` errors only, `1` + events (`grabbed …`), `2` + config detail (default: unknown keys ignored, reload rejected, config reloaded old→new), `3` + debug. | Set `0` on a healthy system for silence; raise to `3` temporarily when debugging device selection. Lowering below `2` also hides the `config reloaded:` confirmation line itself. |
-| `LATENCY_LOG` | `True`/`False`. Per-second measured latency summary lines plus a computed model line at startup/config change. Independent of `LOG_LEVEL`. | Debugging only: set `true`, watch `journalctl -u veloscroll`, then leave it `false`. |
-
-### Misc
-
-| Key | Meaning / units | Tuning hint |
-|-----|-----------------|-------------|
-| `MAX_BACKUPS` | How many `.bak-<timestamp>` backups the preset helper and seed script keep per file family. `-1` = unlimited, `N ≥ 1` = keep only the newest N after each run that writes a backup, `0` = backups disabled entirely (existing ones stay untouched). | Hot-reloaded like every other key — each helper run reads the current value. Set `0` if you don't want any `.bak-*` files at all. |
-| `TICK` | Ticker loop period in seconds; `0.004` s ≈ 250 Hz — how often the scroll rate is recomputed and hi-res events are emitted. Changing it requires an admin authentication (the helper raises such a write to the polkit `tick` action); everything else applies silently. | Not a feel setting (that's `OUT_SMOOTH`/`MAX_RATE`). Only lower it if scrolling still looks steppy, at the cost of more CPU. |
-| `STATE_FILE` | `True`/`False`. When true, the daemon writes `/run/veloscroll/state`: a JSON snapshot of all effective values, the grabbed devices and scroll activity (plus reload health) for GUI frontends to read. Off by default — zero overhead when no GUI runs. | Per-machine operational state like `MAX_BACKUPS` — never part of presets; managed by the GUI itself (forced on while it is open, off at exit — no selector row). The shipped unit creates `/run/veloscroll` (`RuntimeDirectory=veloscroll`). See [GUI-managed lifecycle keys in the README](README.md#gui-managed-lifecycle-keys-state_file-distance_file). |
-| `DISTANCE_FILE` | `True`/`False`. When true, the daemon writes a second file, `/run/veloscroll/distance`: the live per-axis distances (vertical + horizontal) and smoothed rate of the active scroll session, rewritten on every ticker tick while a button is held (~250 Hz). This is what drives the Ramp tab's live curve markers — with it off they only follow your mouse. Off by default — zero overhead without a consumer. | Per-machine operational state like `STATE_FILE` — never part of presets; managed by the GUI itself (forced on while open when the Ramp tab checkbox is checked, always off at exit — no selector row). The same unit creates `/run/veloscroll` for this file too. See [GUI-managed lifecycle keys in the README](README.md#gui-managed-lifecycle-keys-state_file-distance_file). |
