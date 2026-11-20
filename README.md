@@ -24,10 +24,10 @@ install needs — device and button selection happen in the GUI after first laun
 
     | Distribution  | Command |
     |---------------|---------|
-    | Debian/Ubuntu | `sudo apt install python3-evdev python3-dbus python3-gi` |
-    | Fedora        | `sudo dnf install python3-evdev python3-dbus python3-gobject` |
-    | Arch          | `sudo pacman -S python-evdev python-dbus python-gobject` |
-    | openSUSE      | `sudo zypper in python3-evdev python3-dbus-python python3-gobject` |
+    | Debian/Ubuntu | `sudo apt install python3 python3-evdev cmake g++ python3-dbus python3-gi` |
+    | Fedora        | `sudo dnf install python3 python3-evdev cmake g++ python3-dbus python3-gobject` |
+    | Arch          | `sudo pacman -S python python-evdev python-dbus cmake gcc python-gobject` |
+    | openSUSE      | `sudo zypper in python3 python3-evdev cmake g++python3-dbus-python python3-gobject` |
     **Fallback**: pip inside a virtualenv: python3 -m venv <dir>, activate it, then pip install evdev.
 
 2. **Clone the projects** to a stable location:

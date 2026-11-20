@@ -13,8 +13,9 @@ Methods (in -> out):
   Ping()                       -> s        liveness probe for the permissions panel
   ApplyConfig(text)            -> (b, s)   validate with the daemon's own parser + atomic replace of
                                            /etc/veloscroll/config.ini; (False, reason) on rejection.
-                                           Silent config tier — unless the new text changes the effective
-                                           TICK value, in which case it is gated by the auth_admin tick action
+                                           Silent config tier — unless the new text changes the DAEMON_CPP
+                                           branch selection (auth_admin daemon-branch action) or the effective
+                                           TICK value (auth_admin tick action)
   Logs(n)                      -> s        last n journal lines of the veloscroll service
   Devices()                    -> s        JSON list of every /dev/input/event* node readable as root
   StartCapture(paths[], max_s) -> u        stream EV_KEY press edges from input nodes; returns a stream id.
@@ -26,9 +27,15 @@ Methods (in -> out):
                                              (same grammar as the CLI); fail-closed if that copy is missing. Silent config tier — unless a loadall or
                                              restore would put a different effective TICK into config.ini, then the auth_admin tick action gates it
    DaemonReload()               -> s        systemctl daemon-reload
-   Update()                     -> s        one-click daemon update: pull as the checkout owner, re-deploy changed files to
-                                            /usr/lib/veloscroll (self-healing pre-v1.4 installs), conditional unit refresh +
-                                            restart; transcript returned (may take ~2 min)
+   Update(branch)               -> s        one-click daemon update for the given branch (main = the Python daemon,
+                                            cpp = the C++ core; anything else is rejected): migrate the checkout to that
+                                            branch when it sits on the other one, pull as the checkout owner, then the
+                                            branch's deploy — the five Python files, or a CMake build + install of the five
+                                            C++ binaries — self-healing pre-v1.4 installs; conditional unit refresh +
+                                            restart; transcript returned (the cpp build may take a few minutes)
+  ApplyAndUpdate(text, branch) -> s        the branch-flip Apply as ONE operation: validate + write the config, then the
+                                            full Update(branch) — behind a single auth_admin daemon-branch gate (one
+                                            password prompt for everything); transcript returned
   UpdateGui()                  -> s        one-click GUI update; transcript returned
 
 Signals:
@@ -39,9 +46,11 @@ Signals:
 Auth tiers (org.veloscroll.gui.policy): read/config/service are `yes` (silent); capture/update/tick are
 `auth_admin` (native polkit prompt every call). ApplyConfig and Preset normally run on the silent config
 tier — but a resolver decides per call, read-only and before authorization: when such a write would actually
-change TICK (a different effective tick in the new text, or in a preset loadall / restored backup), it is
-raised to the auth_admin `tick` action instead. Denial, cancellation or a missing agent surface as the D-Bus
-error org.veloscroll.gui.NotAuthorized; any other failure is org.veloscroll.gui.Failed with the detail text.
+change the DAEMON_CPP branch selection (a different effective branch in the new text, or in a restored
+backup) it is raised to the auth_admin `daemon-branch` action, and when it would change TICK (a different
+effective tick in the new text, or in a preset loadall / restored backup) to the auth_admin `tick` action.
+Denial, cancellation or a missing agent surface as the D-Bus error org.veloscroll.gui.NotAuthorized; any
+other failure is org.veloscroll.gui.Failed with the detail text.
 
 Threading: the GLib main loop is the only D-Bus I/O thread (dispatch + signal emission). Every method
 body runs in a worker thread — including the polkit CheckAuthorization, which blocks on the auth prompt
@@ -92,6 +101,26 @@ DAEMON_DEPLOY_FILES = (              # repo-relative files that must stay in DEP
     os.path.join("helpers", "ListButtonPresses.py"),
     os.path.join("helpers", "veloscroll_tuning_helper.py"),
 )
+# the two daemon branches the GUI's C++-daemon checkbox can select (must match velogui/proc.py + update_dialog.py):
+# main = the Python daemon (file deploy above), cpp = the C++ core (CMake build + install below)
+DAEMON_BRANCHES = ("main", "cpp")
+# the five C++ install targets built on the cpp branch — only these (the C++ test suite is skipped, keeping the
+# update fast and network-free); they are exactly what `cmake --install` places into DEPLOY_DIR
+CPP_BUILD_TARGETS = (
+    "veloscroll",
+    "veloscroll_seed",
+    "veloscroll_tuning_helper",
+    "ListDeviceNames",
+    "ListButtonPresses",
+)
+# the Python deploy files that a cpp deploy removes again (stale after a main -> cpp migration; the C++
+# binaries replace them). veloscroll.py + veloscroll_preset.py stay: the preset imports veloscroll from its
+# own directory, and this helper imports it from DEPLOY_DIR for config validation.
+CPP_STALE_PY_FILES = (
+    os.path.join("helpers", "ListDeviceNames.py"),
+    os.path.join("helpers", "ListButtonPresses.py"),
+    os.path.join("helpers", "veloscroll_tuning_helper.py"),
+)
 GUI_DIR = "/opt/veloscroll-gui"
 CONFIG_PATH = "/etc/veloscroll/config.ini"
 SERVICE = "veloscroll"
@@ -113,6 +142,7 @@ ACTION_SERVICE = "org.veloscroll.gui.service"  # Service / DaemonReload
 ACTION_CAPTURE = "org.veloscroll.gui.capture"  # StartCapture (auth_admin)
 ACTION_UPDATE = "org.veloscroll.gui.update"    # Update / UpdateGui (auth_admin)
 ACTION_TICK = "org.veloscroll.gui.tick"        # ApplyConfig / Preset when they would actually change TICK (auth_admin, resolved per call)
+ACTION_BRANCH = "org.veloscroll.gui.daemon-branch"  # ApplyConfig / Preset-restore when they would change the DAEMON_CPP branch (auth_admin, resolved per call)
 
 CAPTURE_CAP_S = 3600   # hard backstop per stream: the GUI re-arms explicitly, this only bounds a leaked one
 
@@ -248,10 +278,33 @@ def _effective_tick(text):
         return None                                 # unparseable value — undeterminable (a real write would be rejected anyway)
 
 
+_BRANCH_TRUE = ("1", "true", "yes", "on")
+_BRANCH_FALSE = ("0", "false", "no", "off")
+
+
+def _effective_branch(text):
+    """The DAEMON_CPP branch selection a given config text would make (True = the cpp branch, False = main),
+    parsed exactly like the GUI's gui_bool (absent or unrecognized text -> False = main). None when the text
+    is not parseable INI (undeterminable -> callers gate conservatively)."""
+    cp = configparser.ConfigParser(interpolation=None)
+    cp.optionxform = str
+    try:
+        cp.read_string(text if isinstance(text, str) else "")
+    except (configparser.Error, TypeError):
+        return None
+    raw = ""
+    if cp.has_section("veloscroll"):
+        raw = (cp["veloscroll"].get("DAEMON_CPP") or "").strip().lower()
+    if raw in _BRANCH_TRUE:
+        return True
+    return False
+
+
 def _apply_config_action(text):
-    """The polkit action for an ApplyConfig call, decided read-only before authorization: the auth_admin tick
-    tier only when a valid new text would actually change the effective TICK value; otherwise the silent config
-    tier (work() re-validates — idempotent). Undeterminable -> gate conservatively (fail closed)."""
+    """The polkit action for an ApplyConfig call, decided read-only before authorization: the auth_admin
+    daemon-branch tier when a valid new text would change the DAEMON_CPP branch selection, else the auth_admin
+    tick tier when it would change the effective TICK value, else the silent config tier (work() re-validates
+    — idempotent). Undeterminable -> gate conservatively (fail closed)."""
     if len(text.encode("utf-8", "replace")) > MAX_CONFIG_BYTES:
         return ACTION_CONFIG                        # work() rejects it before any write — no prompt needed
     try:
@@ -262,8 +315,13 @@ def _apply_config_action(text):
         return ACTION_TICK                          # undeterminable (e.g. a malformed disk config kills the import) -> gate conservatively
     if _validate_text(vs, text)[1] is not None:     # rejected text never writes — surface the validation error without a prompt
         return ACTION_CONFIG
+    cur_text = _read_config_file()
+    new_branch = _effective_branch(text)
+    cur_branch = _effective_branch(cur_text)
+    if new_branch is None or cur_branch is None or new_branch != cur_branch:
+        return ACTION_BRANCH                        # the branch selection changes (or is undeterminable) -> auth_admin
     new_tick = _effective_tick(text)
-    cur_tick = _effective_tick(_read_config_file())
+    cur_tick = _effective_tick(cur_text)
     if new_tick is None or cur_tick is None:
         return ACTION_TICK                          # undeterminable -> gate conservatively (fail closed)
     return ACTION_TICK if new_tick != cur_tick else ACTION_CONFIG
@@ -453,12 +511,14 @@ def op_preset(ops):
 
 
 def _preset_action(ops):
-    """The polkit action for a Preset call, decided read-only before authorization: the auth_admin tick tier
-    only when an operation would actually put a different effective TICK into config.ini — a `loadall NAME`
-    whose preset file carries one, or a `restore [BACKUP]` that puts such a backup back over config.ini.
-    Everything else (save/delete/list/backups and the group loads — no group key set contains TICK) stays on
-    the silent config tier; an operation the CLI would reject before any write never prompts either.
-    Undeterminable -> gate conservatively (fail closed)."""
+    """The polkit action for a Preset call, decided read-only before authorization: the auth_admin
+    daemon-branch tier when a `restore [BACKUP]` would put a different DAEMON_CPP branch selection over
+    config.ini (a backup from before the branch was set drops the key), else the auth_admin tick tier when an
+    operation would actually put a different effective TICK into config.ini — a `loadall NAME` whose preset
+    file carries one, or a `restore [BACKUP]` that puts such a backup back over config.ini. Everything else
+    (save/delete/list/backups and the group loads — no group key set contains TICK, and loads rewrite only
+    their own daemon keys, leaving DAEMON_CPP untouched) stays on the silent config tier; an operation the CLI
+    would reject before any write never prompts either. Undeterminable -> gate conservatively (fail closed)."""
     ops = [str(o) for o in ops]
     if not ops:
         return ACTION_CONFIG                        # op_preset rejects it — no write, no prompt needed
@@ -482,10 +542,18 @@ def _preset_action(ops):
             return ACTION_CONFIG                    # restoring a preset file never touches config.ini
         try:
             with open(bak, "r", encoding="utf-8") as f:
-                bak_tick = _effective_tick(f.read())
+                bak_text = f.read()
         except OSError:
             return ACTION_TICK                      # undeterminable -> gate conservatively (fail closed)
-        cur_tick = _effective_tick(_read_config_file())
+        cur_text = _read_config_file()
+        # a restore puts the whole backup over config.ini — a backup from before the branch was set would
+        # silently drop DAEMON_CPP, so a branch change is gated like a tick change
+        bak_branch = _effective_branch(bak_text)
+        cur_branch = _effective_branch(cur_text)
+        if bak_branch is None or cur_branch is None or bak_branch != cur_branch:
+            return ACTION_BRANCH                    # undeterminable or the branch selection changes -> auth_admin
+        bak_tick = _effective_tick(bak_text)
+        cur_tick = _effective_tick(cur_text)
         if bak_tick is None or cur_tick is None:
             return ACTION_TICK                      # undeterminable -> gate conservatively (fail closed)
         return ACTION_TICK if bak_tick != cur_tick else ACTION_CONFIG
@@ -536,21 +604,25 @@ def op_daemon_reload():
 
 # --- update -------------------------------------------------------------------
 
-def _git(args, repo_dir=DAEMON_DIR, timeout=60):
-    """Run git as the user who owns the checkout. The polkit gate is already the privilege boundary — running
-    git as root inside a user-owned checkout only adds "dubious ownership" failures and leaves root-owned
-    objects in .git. A root-owned checkout runs as root (same uid, so no dubious-ownership issue there)."""
-    cmd = ["git", "-C", repo_dir, *args]
+def _owner_prefix(repo_dir):
+    """(prefix_args, env) for running a command as the user who owns the checkout — ([], None) for a
+    root-owned checkout. The polkit gate is already the privilege boundary: running as root inside a
+    user-owned checkout only adds "dubious ownership" failures (git) and root-owned artifacts (builds)."""
     try:
         pw = pwd.getpwuid(os.stat(repo_dir).st_uid)
     except (OSError, KeyError):
-        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        return [], None
     if pw.pw_uid != 0:
-        cmd = ["setpriv", f"--reuid={pw.pw_uid}", f"--regid={pw.pw_gid}", "--init-groups", *cmd]
-        env = dict(os.environ, HOME=pw.pw_dir, USER=pw.pw_name, LOGNAME=pw.pw_name)
-    else:
-        env = None
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env)
+        return (["setpriv", f"--reuid={pw.pw_uid}", f"--regid={pw.pw_gid}", "--init-groups"],
+                dict(os.environ, HOME=pw.pw_dir, USER=pw.pw_name, LOGNAME=pw.pw_name))
+    return [], None
+
+
+def _git(args, repo_dir=DAEMON_DIR, timeout=60):
+    """Run git as the user who owns the checkout (see _owner_prefix)."""
+    prefix, env = _owner_prefix(repo_dir)
+    return subprocess.run(prefix + ["git", "-C", repo_dir, *args],
+                          capture_output=True, text=True, timeout=timeout, env=env)
 
 
 def _deploy_helper(add):
@@ -603,15 +675,107 @@ def _deploy_daemon(add):
     return True
 
 
-def op_update():
-    """Update the daemon per docs/UPDATING.md: `git pull --ff-only` in /opt/veloscroll (as the checkout owner);
-    re-deploy any changed files to DEPLOY_DIR before anything else (self-healing pre-v1.4 installs that have no
-    deployed copy at all); if the release changed veloscroll.service, deploy it + daemon-reload; restart only when
-    veloscroll.py or the unit changed and tail the journal; schedule a helper self-restart ~2 s after replying
-    whenever deployed files changed (drops this process's cached veloscroll/veloscroll_preset modules).
+def _build_and_deploy_cpp(add):
+    """Build the five C++ install targets as the checkout owner and install them to DEPLOY_DIR (root);
+    transcript lines via add().
+
+    Mirrors the canonical cpp deploy block in docs/INSTALL.md, narrowed to the five install targets
+    (CPP_BUILD_TARGETS) — the C++ test suite is not built, so there is no GoogleTest fetch and the update
+    stays fast. `cmake --install` places the binaries + veloscroll.service + docs; the preset CLI and the
+    legacy veloscroll.py are copied alongside (the preset imports veloscroll from its own directory, and
+    this helper imports it from DEPLOY_DIR for config validation); the stale Python deploy files left by a
+    previous main-branch install are removed. The whole tree is then normalized to root-owned 755 and
+    verified, exactly like _deploy_daemon. A failed build leaves the previous install untouched
+    (cmake --install only runs after a successful build). Returns True on success."""
+    prefix, env = _owner_prefix(DAEMON_DIR)
+    build_dir = os.path.join(DAEMON_DIR, "build")
+    add(f"$ cmake -S {DAEMON_DIR} -B {build_dir}   (as the checkout owner)")
+    try:
+        p = subprocess.run(prefix + ["cmake", "-S", DAEMON_DIR, "-B", build_dir],
+                           capture_output=True, text=True, timeout=120, env=env)
+    except FileNotFoundError:
+        add("ERROR: cmake not found — install the C++ toolchain (cmake, g++) per README.md and retry")
+        return False
+    except subprocess.TimeoutExpired:
+        add("ERROR: cmake configure timed out after 120 s — nothing was changed; retry")
+        return False
+    for line in (p.stdout or "").splitlines():
+        add("  " + line)
+    if p.returncode != 0:
+        err = (p.stderr or p.stdout or "").strip().splitlines()
+        add(f"ERROR: cmake configure failed: {err[0] if err else 'unknown error'}")
+        return False
+    add(f"$ cmake --build {build_dir} --target {' '.join(CPP_BUILD_TARGETS)}   (only the five install targets)")
+    try:
+        p = subprocess.run(prefix + ["cmake", "--build", build_dir, "--target", *CPP_BUILD_TARGETS,
+                                     "-j", str(os.cpu_count() or 2)],
+                           capture_output=True, text=True, timeout=600, env=env)
+    except subprocess.TimeoutExpired:
+        add("ERROR: the C++ build timed out after 600 s — nothing was installed; retry")
+        return False
+    for line in (p.stdout or "").splitlines()[-20:]:
+        add("  " + line)
+    if p.returncode != 0:
+        err = (p.stderr or p.stdout or "").strip().splitlines()
+        add(f"ERROR: the C++ build failed: {err[0] if err else 'unknown error'} — the previous install is untouched")
+        return False
+    add(f"$ cmake --install {build_dir}   (binaries + veloscroll.service + docs, as root)")
+    try:
+        p = subprocess.run(["cmake", "--install", build_dir], capture_output=True, text=True, timeout=60)
+    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+        add(f"ERROR: cmake --install failed: {exc}")
+        return False
+    for line in (p.stdout or "").splitlines():
+        add("  " + line)
+    if p.returncode != 0:
+        err = (p.stderr or p.stdout or "").strip().splitlines()
+        add(f"ERROR: cmake --install failed: {err[0] if err else 'unknown error'}")
+        return False
+    add(f"$ cp veloscroll_preset.py veloscroll.py -> {DEPLOY_DIR}/ && remove the stale Python deploy files")
+    try:
+        for rel in ("veloscroll_preset.py", "veloscroll.py"):
+            shutil.copy2(os.path.join(DAEMON_DIR, rel), os.path.join(DEPLOY_DIR, rel))
+        for rel in CPP_STALE_PY_FILES:
+            path = os.path.join(DEPLOY_DIR, rel)
+            if os.path.isfile(path):
+                os.remove(path)
+        for root, dirs, files in os.walk(DEPLOY_DIR):      # chown -R + chmod 755 over the whole tree (also normalizes drift)
+            os.chown(root, 0, 0)
+            for name in dirs + files:
+                path = os.path.join(root, name)
+                os.chown(path, 0, 0)
+                os.chmod(path, 0o755)
+    except OSError as exc:
+        add(f"ERROR: cpp deploy failed: {exc}")
+        return False
+    for name in CPP_BUILD_TARGETS:
+        path = os.path.join(DEPLOY_DIR, name)
+        try:
+            st = os.stat(path)
+        except OSError:
+            add(f"ERROR: deployed {name} is missing after the install — run the deploy block in docs/INSTALL.md")
+            return False
+        if st.st_uid != 0 or (st.st_mode & 0o022):
+            add(f"ERROR: deployed {name} is not root-owned and/or user-writable — fix manually before restarting")
+            return False
+    add(f"built + installed the five C++ binaries -> {DEPLOY_DIR}/ (root-owned 755)")
+    return True
+
+
+def op_update(branch="main"):
+    """Update the daemon per docs/UPDATING.md for the given branch (main = the Python daemon, cpp = the
+    C++ core): migrate the checkout to that branch when it sits on the other one (fetch + checkout,
+    creating a tracking branch when the local one is missing), `git pull --ff-only` as the checkout
+    owner, then the branch's deploy — the five Python files, or a CMake build + install of the five C++
+    binaries — before anything else (self-healing pre-v1.4 installs that have no deployed copy at all);
+    if the release changed veloscroll.service, deploy it + daemon-reload; restart only when the daemon
+    code or the unit changed and tail the journal; schedule a helper self-restart ~2 s after replying
+    whenever the deploy changed (drops this process's cached veloscroll/veloscroll_preset modules).
 
     Returns the full transcript on success (same marker lines as before: `previous commit:` +
     `result:`); raises HelperFailed with the transcript on failure so the GUI log shows either way."""
+    if branch not in DAEMON_BRANCHES:
+        raise HelperFailed(f"unknown daemon branch {branch!r} — expected one of {', '.join(DAEMON_BRANCHES)}")
     t = []
 
     def add(line=""):
@@ -640,12 +804,48 @@ def op_update():
     dirty = _git(["status", "--porcelain"], timeout=10).stdout.strip().splitlines()
     if dirty:
         add(f"warning: working tree is dirty ({len(dirty)} uncommitted change(s)) — "
-            "the pull may fail or keep them")
+            "the branch switch and the pull may fail or keep them")
+
+    # -- branch migration (only when the checkout sits on the other branch) -------
+    switched = False
+    cur = _git(["branch", "--show-current"], timeout=10).stdout.strip()
+    if cur != branch:
+        where = cur if cur else "detached HEAD"
+        add(f"migrating the checkout from {where} to branch {branch}")
+        add(f"$ git -C {DAEMON_DIR} fetch origin {branch}")
+        try:
+            p = _git(["fetch", "origin", branch], timeout=60)
+        except subprocess.TimeoutExpired:
+            add("ERROR: `git fetch` timed out after 60 s — nothing was changed; retry when the network is up")
+            finish(False, "update failed (git fetch timed out)")
+        for line in (p.stdout or "").splitlines():
+            add("  " + line)
+        if p.returncode != 0:
+            err = (p.stderr or p.stdout or "").strip().splitlines()
+            add(f"ERROR: git fetch failed: {err[0] if err else 'unknown error'}")
+            finish(False, f"update failed — git fetch was rejected ({(err[0] if err else '').strip()[:120]})")
+        # check out the branch: use the local one when it exists, else create it tracking origin/<branch>
+        exists = _git(["rev-parse", "--verify", "--quiet", f"refs/heads/{branch}"], timeout=10).returncode == 0
+        args = ["checkout", branch] if exists else ["checkout", "-b", branch, f"origin/{branch}"]
+        add(f"$ git -C {DAEMON_DIR} {' '.join(args)}")
+        try:
+            p = _git(args, timeout=30)
+        except subprocess.TimeoutExpired:
+            add("ERROR: the branch checkout timed out after 30 s — nothing was changed")
+            finish(False, "update failed (branch checkout timed out)")
+        for line in (p.stdout or "").splitlines():
+            add("  " + line)
+        if p.returncode != 0:
+            err = (p.stderr or p.stdout or "").strip().splitlines()
+            add(f"ERROR: branch checkout failed: {err[0] if err else 'unknown error'}")
+            finish(False, f"update failed — the checkout to {branch} was rejected "
+                          f"(local changes?) ({(err[0] if err else '').strip()[:120]})")
+        switched = True
 
     # -- pull ---------------------------------------------------------------------
-    add(f"$ git -C {DAEMON_DIR} pull --ff-only")
+    add(f"$ git -C {DAEMON_DIR} pull --ff-only origin {branch}")
     try:
-        p = _git(["pull", "--ff-only"], timeout=60)
+        p = _git(["pull", "--ff-only", "origin", branch], timeout=60)
     except subprocess.TimeoutExpired:
         add("ERROR: `git pull` timed out after 60 s — nothing was changed; retry when the network is up")
         finish(False, "update failed (git pull timed out)")
@@ -657,9 +857,24 @@ def op_update():
         finish(False, f"update failed — git pull was rejected ({(err[0] if err else '').strip()[:120]})")
 
     new_head = _git(["rev-parse", "HEAD"], timeout=10).stdout.strip()
-    if new_head == prev_head or "Already up to date." in (p.stdout or ""):
+    if new_head == prev_head and not switched:
         # pre-v1.4 installs have no /usr/lib/veloscroll at all — self-heal even on a no-op pull
         if not os.path.isdir(DEPLOY_DIR):
+            if branch == "cpp":
+                add(f"$ cmake -S {DAEMON_DIR} -B {DAEMON_DIR}/build && cmake --build ... && cmake --install ... "
+                    f"&& cp veloscroll_preset.py veloscroll.py -> {DEPLOY_DIR}/   (deployed copy missing)")
+                if not _build_and_deploy_cpp(add):
+                    finish(False, "update could not create the deployed daemon copy — install cmake + g++ "
+                                  "(see README.md) or run the deploy block in docs/INSTALL.md")
+                # cmake --install placed a fresh veloscroll.service — make systemd see it
+                try:
+                    p = subprocess.run(["systemctl", "daemon-reload"], capture_output=True, text=True, timeout=20)
+                    if p.returncode == 0:
+                        add("  service file refreshed + systemd reloaded")
+                except (FileNotFoundError, subprocess.TimeoutExpired):
+                    add("warning: systemctl daemon-reload failed — run it manually")
+                return finish(True, "already up to date — nothing was pulled; created the missing "
+                                    "/usr/lib/veloscroll deploy (cpp build + install)")
             add(f"$ mkdir -p {DEPLOY_DIR}/helpers && cp the five daemon files -> {DEPLOY_DIR}/   (deployed copy missing)")
             if not _deploy_daemon(add):
                 finish(False, "update could not create the deployed daemon copy — run the deploy block in docs/INSTALL.md")
@@ -667,21 +882,44 @@ def op_update():
         return finish(True, "already up to date — nothing was pulled and the service was left running")
 
     count = _git(["rev-list", "--count", f"{prev_head}..{new_head}"], timeout=10).stdout.strip()
-    add(f"updated {prev_head[:9]} → {new_head[:9]} ({count} new commit(s))")
+    if switched:
+        add(f"migrated {prev_head[:9]} → {new_head[:9]} (branch {cur or 'detached HEAD'} → {branch}, "
+            f"{count} new commit(s))")
+    else:
+        add(f"updated {prev_head[:9]} → {new_head[:9]} ({count} new commit(s))")
 
     changed = set(_git(["diff", "--name-only", prev_head, new_head], timeout=10).stdout.split())
-    deploy_changed = [f for f in DAEMON_DEPLOY_FILES if f in changed]
     unit_changed = "veloscroll.service" in changed
+    if branch == "cpp":
+        # the C++ core is rebuilt when the pull touched its sources or the build definition
+        code_changed = any(f == "CMakeLists.txt" or f.startswith("src/") for f in changed)
+        deploy_changed = ["the C++ core"] if code_changed else []
+    else:
+        deploy_changed = [f for f in DAEMON_DEPLOY_FILES if f in changed]
+        code_changed = "veloscroll.py" in deploy_changed
 
     # -- deploy the root-executed copies (before any unit refresh/restart) --------------
-    # The running daemon is always the deployed copy: re-deploy when a pulled release touched one of the five
-    # files, or when DEPLOY_DIR is missing entirely (pre-v1.4 install -> self-heal). Deploying first guarantees
-    # the new ExecStart target exists by the time the service comes up.
-    if deploy_changed or not os.path.isdir(DEPLOY_DIR):
-        why = f"{len(deploy_changed)} file(s) changed" if deploy_changed else "deployed copy missing (pre-v1.4 install)"
-        add(f"$ cp {DAEMON_DIR}/<five files> -> {DEPLOY_DIR}/ && chown -R root:root && chmod 755   ({why})")
-        if not _deploy_daemon(add):
-            finish(False, "update pulled code but the daemon deploy failed — run the deploy block in docs/INSTALL.md")
+    # The running daemon is always the deployed copy: re-deploy when the pulled release touched the
+    # daemon code (a Python file, or C++ sources / CMakeLists on the cpp branch), when the branch was
+    # switched (the on-disk code changed even if the pull itself was a no-op), or when DEPLOY_DIR is
+    # missing entirely (pre-v1.4 install -> self-heal). Deploying first guarantees the new ExecStart
+    # target exists by the time the service comes up.
+    need_deploy = switched or code_changed or not os.path.isdir(DEPLOY_DIR)
+    if need_deploy:
+        if branch == "cpp":
+            why = ("branch switch" if switched else
+                   "C++ sources changed" if code_changed else "deployed copy missing (pre-v1.4 install)")
+            add(f"$ cmake -S {DAEMON_DIR} -B {DAEMON_DIR}/build && cmake --build ... --target <five targets> "
+                f"&& cmake --install ... && cp veloscroll_preset.py veloscroll.py -> {DEPLOY_DIR}/   ({why})")
+            if not _build_and_deploy_cpp(add):
+                finish(False, "update pulled code but the C++ build/deploy failed — install cmake + g++ "
+                              "(see README.md) and retry, or roll back")
+        else:
+            why = (f"{len(deploy_changed)} file(s) changed" if deploy_changed
+                   else "branch switch" if switched else "deployed copy missing (pre-v1.4 install)")
+            add(f"$ cp {DAEMON_DIR}/<five files> -> {DEPLOY_DIR}/ && chown -R root:root && chmod 755   ({why})")
+            if not _deploy_daemon(add):
+                finish(False, "update pulled code but the daemon deploy failed — run the deploy block in docs/INSTALL.md")
 
     # -- service-file refresh (only when the release changed it) -------------------
     if unit_changed:
@@ -707,10 +945,10 @@ def op_update():
         add("helper service restarts itself in ~2 s to load the new daemon code (if it doesn't come back: "
             f"sudo systemctl restart {HELPER_SERVICE_NAME})")
 
-    # -- restart only if veloscroll.py or the unit changed ------------------------------
-    if not ("veloscroll.py" in deploy_changed or unit_changed):
-        add("note: neither veloscroll.py nor veloscroll.service changed — the running daemon is left untouched")
-        if deploy_changed:
+    # -- restart only if the daemon code or the unit changed ------------------------------
+    if not (code_changed or unit_changed or switched):
+        add("note: neither the daemon code nor veloscroll.service changed — the running daemon is left untouched")
+        if need_deploy:
             schedule_helper_restart()
         deployed = (f"deployed {' '.join(deploy_changed)} to {DEPLOY_DIR}" if deploy_changed
                     else f"created the missing {DEPLOY_DIR} deploy (pre-v1.4 install)")
@@ -752,16 +990,18 @@ def op_update():
         add("  " + line)
 
     joined = "\n".join(lines).lower()
-    if deploy_changed:
+    if need_deploy:
         schedule_helper_restart()
-    if "config loaded from" in joined:
+    # the config-loaded marker is the Python daemon's; the C++ core is verified by its clean state + journal only
+    if branch == "main" and "config loaded from" in joined:
         return finish(True, f"updated {prev_head[:9]} → {new_head[:9]} and restarted — the daemon logged a fresh config load")
     bad = next((m for m in ("config error:", "could not create virtual mouse", "traceback (most recent call last)")
                 if m in joined), None)
     if bad:
         finish(False, f"update pulled code but the service logged a startup error ({bad}) — roll back if it misbehaves")
-    return finish(True, f"updated {prev_head[:9]} → {new_head[:9]} and restarted "
-                        "(LOG_LEVEL hides the config-loaded line; no startup errors in the journal)")
+    tail = ("(LOG_LEVEL hides the config-loaded line; no startup errors in the journal)" if branch == "main"
+            else "(no startup errors in the journal)")
+    return finish(True, f"updated {prev_head[:9]} → {new_head[:9]} and restarted {tail}")
 
 
 def op_update_gui():
@@ -851,6 +1091,25 @@ def op_update_gui():
             finish(False, "update pulled code but the policy redeploy failed — reinstall org.veloscroll.gui.policy manually")
         add("policy reinstalled (polkitd watches /usr/share/polkit-1/actions/ — no reload needed)")
     return finish(True, f"updated {prev_head[:9]} → {new_head[:9]}; closing & reopening the GUI to run the new version")
+
+
+def op_apply_and_update(text, branch="main"):
+    """The GUI's branch-flip Apply as ONE privileged operation: validate + write the config, then run
+    the full daemon update for the given branch (migrate + pull + build/deploy + restart). A single
+    polkit gate (the auth_admin daemon-branch action) covers both — the GUI shows one concise popup and
+    the user answers one password prompt for everything. The config is written first (validated, backed
+    up, atomic) so the restarted daemon loads it; a rejected config never touches the file and never
+    starts the update. Returns the combined transcript (the config line first); raises HelperFailed
+    with it on failure, so the GUI's transcript pane shows either way."""
+    ok, msg = apply_config_text(text)
+    if not ok:
+        raise HelperFailed(msg)
+    try:
+        transcript = op_update(branch)
+    except HelperFailed as exc:
+        # keep the config line so the GUI can tell the config landed before the update failed
+        raise HelperFailed(f"config applied ({msg})\n" + str(exc)) from exc
+    return f"config applied ({msg})\n" + transcript
 
 
 # --- capture streams ------------------------------------------------------------------
@@ -1070,10 +1329,18 @@ class Helper(dbus.service.Object):
     def DaemonReload(self, reply_ok, reply_err, sender):
         self._dispatch(sender, ACTION_SERVICE, lambda: (op_daemon_reload(),), reply_ok, reply_err)
 
-    @dbus.service.method(HELPER_IFACE, in_signature="", out_signature="s",
+    @dbus.service.method(HELPER_IFACE, in_signature="s", out_signature="s",
                          async_callbacks=("reply_ok", "reply_err"), sender_keyword="sender")
-    def Update(self, reply_ok, reply_err, sender):
-        self._dispatch(sender, ACTION_UPDATE, lambda: (op_update(),), reply_ok, reply_err)
+    def Update(self, branch, reply_ok, reply_err, sender):
+        self._dispatch(sender, ACTION_UPDATE, lambda: (op_update(str(branch)),), reply_ok, reply_err)
+
+    @dbus.service.method(HELPER_IFACE, in_signature="ss", out_signature="s",
+                         async_callbacks=("reply_ok", "reply_err"), sender_keyword="sender")
+    def ApplyAndUpdate(self, text, branch, reply_ok, reply_err, sender):
+        # the branch-flip Apply: config write + migration/deploy/restart behind ONE polkit gate
+        # (the auth_admin daemon-branch action) — a single prompt for everything
+        self._dispatch(sender, ACTION_BRANCH,
+                       lambda: (op_apply_and_update(str(text), str(branch)),), reply_ok, reply_err)
 
     @dbus.service.method(HELPER_IFACE, in_signature="", out_signature="s",
                          async_callbacks=("reply_ok", "reply_err"), sender_keyword="sender")

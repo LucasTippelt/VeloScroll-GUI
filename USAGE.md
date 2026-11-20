@@ -9,14 +9,17 @@ README ([One-time setup](README.md#one-time-setup), [Running](README.md#running)
 The first page merges daemon status with config editing; top to bottom: the Daemon group, the values
 table, this page's Apply/Cancel bar, and the [Permissions panel](#permissions-panel).
 
-- **Daemon group** — service state (green = active, red = failed), the devices the daemon currently has
-  grabbed, config reload health (`reload OK` / `reload rejected: …` / `pending reload (~2 s)` when
-  `config.ini` is newer than the last state-file update), and **[Update daemon…]**: a one-click update of
-  the daemon only (per [docs/UPDATING.md](https://github.com/LucasTippelt/VeloScroll/blob/main/docs/UPDATING.md)) —
-    after confirmation it runs the helper service's `Update` (native polkit auth prompt): `git pull --ff-only` in `/opt/veloscroll`, run **as your user** (the checkout owner), then as root re-deploys any changed files to `/usr/lib/veloscroll`
-  a service-file refresh + daemon-reload when the release changed `veloscroll.service`, and a restart only if `veloscroll.py` or the unit changed, plus a journal tail. The
+- **Daemon group** — service state (green = active, red = failed), the **C++ daemon (cpp branch)** checkbox
+  (see below) and the installed daemon core below it (C++ or Python, read from the unit's `ExecStart`),
+  the devices the daemon currently has grabbed, and **[Update daemon…]**: a one-click update of the daemon only, on the branch the checkbox
+  selects (per [docs/UPDATING.md](https://github.com/LucasTippelt/VeloScroll/blob/main/docs/UPDATING.md)) —
+    after confirmation it runs the helper service's `Update(branch)` (native polkit auth prompt), run **as your user** (the checkout owner): it migrates the checkout to the selected branch when it sits on the other one,
+  `git pull --ff-only` on that branch, then as root the branch's deploy — for `main` a re-deploy of any changed files to `/usr/lib/veloscroll`,
+  for `cpp` a CMake build of the five C++ binaries + install —
+  a service-file refresh + daemon-reload when the release changed `veloscroll.service`, and a restart only if the daemon code or the unit changed, plus a journal tail. The
   dialog shows a transcript of every step; on a clean repo it ends in an "already up to date" no-op (nothing is
-  restarted), and after a real update it offers the previous commit as a one-line rollback command. Directly
+  restarted), and after a real update it offers the previous commit as a one-line rollback command
+  (for `cpp`, with a note that a checkout alone does not rebuild the installed binary). Directly
    below it, **[Update GUI…]** updates the GUI only — after confirmation it runs the helper service's `UpdateGui` (native polkit auth prompt):
    `git pull --ff-only` in `/opt/veloscroll-gui`, run **as your user** (the checkout owner); when a release changes the helper it redeploys the runtime copy
 to `/usr/lib/veloscroll-gui` and restarts its service (the self-restart is scheduled after the transcript is
@@ -42,12 +45,26 @@ delivered). The GUI is not a service, so there is nothing to restart via
   immediately without Apply (it is a chrome switch with no daemon round-trip), and Cancel reverts it like
   any other unapplied edit. Press Apply to make a change stick across restarts; an unset key means on. See
   [Tray icon](#tray-icon).
+- **C++ daemon (`DAEMON_CPP`, Daemon group)** — a GUI-only key (the daemon ignores it) that selects the
+  branch of the daemon repo [Update daemon…] and the update check work on: unchecked (the default; an
+  absent key means `False`) is `main`, the Python daemon, checked is `cpp`, the C++ core. Like `TRAY_LED`
+  it applies **live** — and an Apply that flips it shows one concise popup, then saves the config and
+  updates the daemon as a single step behind **one** password prompt (the combined helper operation):
+  it migrates the checkout when needed, pulls, and (for `cpp`) builds the five C++ binaries with CMake
+  and installs them before restarting — so the running core follows the checkbox. If the prompt is
+  cancelled or the config is rejected, nothing is written and your edits stay for a retry; if the update
+  fails after the save, the saved selection stays and [Update daemon…] can finish it. Cancel reverts an
+  unapplied flip like any other edit. The startup update indicator compares against the selected
+  branch's ref, so a pending migration lights up the amber indicator.
 - **Apply / Cancel** (every tab page carries its own bar over the same buffer) — Apply validates inline
   against the daemon's own checks, writes `/etc/veloscroll/config.ini` through the polkit-gated helper service
   (`ApplyConfig`), then confirms the reload from the state file (~2 s) or, without one, from the
-  journal. Cancel discards unapplied edits; if a change was already applied earlier in this session it
-  instead writes the previous config back through the same privileged path so the daemon reloads it.
-  Unsaved changes are marked in every bar and in the window title.
+  journal. An apply that would change the effective TICK raises the native polkit password prompt first
+  (the auth_admin tick tier, resolved per call by the helper); a branch-flip apply is special — after one
+  concise popup, the save and the branch migration/deploy/restart share a single `daemon-branch` prompt
+  (one password for everything); everything else stays silent. Cancel discards unapplied edits; if a change was already applied earlier in
+  this session it instead writes the previous config back through the same privileged path so the daemon
+  reloads it. Unsaved changes are marked in every bar and in the window title.
 - External edits to `config.ini` are picked up on the 2 s refresh cycle (your unapplied edits are kept,
   with a note that Cancel now reverts to your starting point rather than the new file.
   #### Permissions panel

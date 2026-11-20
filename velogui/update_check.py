@@ -1,9 +1,11 @@
-"""Startup update check: local HEAD vs origin's HEAD for both repos, read-only.
+"""Startup update check: local HEAD vs origin's ref for both repos, read-only.
 
-`git ls-remote origin HEAD` performs no writes to `.git` (so it works even though /opt/veloscroll is
-root-owned on fresh installs) and names no branch — main or master both resolve through the remote's
-HEAD symref. Any failure (offline, not a git checkout, no git binary) yields None = "unknown", which
-the UI treats as "no actionable news" rather than an error: startup must never be blocked by it."""
+`git ls-remote origin <ref>` performs no writes to `.git` (so it works even though /opt/veloscroll is
+root-owned on fresh installs). The daemon repo is checked against the branch the GUI's C++-daemon
+checkbox selects (refs/heads/cpp, or the remote's HEAD symref for main — which names no branch, so main
+or master both resolve); the GUI repo always uses HEAD. Any failure (offline, not a git checkout, no git
+binary) yields None = "unknown", which the UI treats as "no actionable news" rather than an error:
+startup must never be blocked by it."""
 import subprocess
 
 from PySide6.QtCore import QThread, Signal
@@ -11,11 +13,12 @@ from PySide6.QtCore import QThread, Signal
 from . import DAEMON_DIR, GUI_DIR
 
 
-def check_repo(repo_dir):
-    """True = the remote's HEAD differs from local (update available), False = up to date, None = unknown.
+def check_repo(repo_dir, ref="HEAD"):
+    """True = the remote's `ref` differs from local (update available), False = up to date, None = unknown.
 
     A local-ahead or diverged checkout also reports True: without fetching objects there is no ancestry
-    check — `git pull --ff-only` then fails safely with its transcript + rollback hint."""
+    check — `git pull --ff-only` then fails safely with its transcript + rollback hint. A checkout that
+    sits on a different branch than `ref` reports True too — the pending migration IS the update."""
     try:
         p = subprocess.run(["git", "-C", repo_dir, "rev-parse", "HEAD"],
                            capture_output=True, text=True, timeout=5)
@@ -25,7 +28,7 @@ def check_repo(repo_dir):
         return None
     local = (p.stdout or "").strip()
     try:
-        r = subprocess.run(["git", "-C", repo_dir, "ls-remote", "origin", "HEAD"],
+        r = subprocess.run(["git", "-C", repo_dir, "ls-remote", "origin", ref],
                            capture_output=True, text=True, timeout=10)
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return None
@@ -38,14 +41,23 @@ def check_repo(repo_dir):
     return bool(local != remote)
 
 
+def daemon_ref(branch):
+    """The remote ref the daemon checkout is compared against for its selected branch."""
+    return "refs/heads/cpp" if branch == "cpp" else "HEAD"
+
+
 class UpdateCheckJob(QThread):
     """Run both repo checks sequentially off the GUI thread; one signal carries both results."""
 
     results = Signal(object)   # (daemon_available, gui_available), each True / False / None
 
+    def __init__(self, parent=None, daemon_branch="main"):
+        super().__init__(parent)
+        self._daemon_branch = "cpp" if daemon_branch == "cpp" else "main"
+
     def run(self):
         try:
-            daemon = check_repo(DAEMON_DIR)
+            daemon = check_repo(DAEMON_DIR, ref=daemon_ref(self._daemon_branch))
         except Exception:      # a worker must never die silently — degrade to unknown instead
             daemon = None
         try:

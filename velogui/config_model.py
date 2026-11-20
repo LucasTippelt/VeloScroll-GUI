@@ -35,8 +35,9 @@ KIND_BTN = "btn"          # SCROLL_BTN / DISABLED_BTN / SCROLL_BTN_H — evdev n
 KIND_NAME = "name"        # NAME_MATCH — free text; empty falls back to the built-in default
 KIND_DEVICE = "device"    # DEVICE_MATCH — vendor/product pair, stable path string, or none
 KIND_TAB = "tab"          # STARTUP_TAB — GUI-owned: one of the tab labels (the daemon ignores this key)
-# TRAY_LED is a GUI-owned KIND_BOOL key: a checkbox row like every other bool,
-# but _recompute_one parses it with gui_bool() instead of the daemon's parser (unknown to it).
+# TRAY_LED / DAEMON_CPP are GUI-owned KIND_BOOL keys: checkboxes like every other bool,
+# but _recompute_one parses them with gui_bool() instead of the daemon's parser (unknown to it).
+# DAEMON_CPP has no selector row — its checkbox lives on the Daemon group next to [Update daemon…].
 
 KEY_KINDS = {
     "DPI": KIND_FLOAT, "DEADZONE_IN": KIND_FLOAT, "FULL_IN": KIND_FLOAT,
@@ -51,6 +52,7 @@ KEY_KINDS = {
     "SCROLL_BTN": KIND_BTN, "DISABLED_BTN": KIND_BTN, "SCROLL_BTN_H": KIND_BTN,
     "STARTUP_TAB": KIND_TAB,
     "TRAY_LED": KIND_BOOL,
+    "DAEMON_CPP": KIND_BOOL,
 }
 
 # keys whose parsed value may be None (unset / feature off)

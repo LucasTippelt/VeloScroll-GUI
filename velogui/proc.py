@@ -104,7 +104,21 @@ def _translate(args, input_text=None):
     if cmd == "daemon-reload":
         return "DaemonReload", []
     if cmd == "update":
-        return "Update", []
+        # the daemon update takes the branch the GUI's C++-daemon checkbox selected (main = the Python
+        # daemon, cpp = the C++ core); the helper validates against the same allowlist
+        branch = rest[0] if rest else "main"
+        if branch not in ("main", "cpp"):
+            raise PrivError(PrivError.KIND_COMMAND_FAILED, f"update: unknown daemon branch {branch!r}")
+        return "Update", [branch]
+    if cmd == "apply-and-update":
+        # the branch-flip Apply: config write + the full daemon update in ONE polkit-gated call
+        # (the helper's ApplyAndUpdate — one password prompt for everything)
+        branch = rest[0] if rest else "main"
+        if branch not in ("main", "cpp"):
+            raise PrivError(PrivError.KIND_COMMAND_FAILED, f"apply-and-update: unknown daemon branch {branch!r}")
+        if input_text is None:
+            raise PrivError(PrivError.KIND_COMMAND_FAILED, "apply-and-update needs the config text")
+        return "ApplyAndUpdate", [input_text, branch]
     if cmd == "update-gui":
         return "UpdateGui", []
     raise PrivError(PrivError.KIND_COMMAND_FAILED, f"unknown helper command {cmd!r}")

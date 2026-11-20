@@ -1,12 +1,15 @@
 """Update dialog: one-click daemon update per docs/UPDATING.md and one-click GUI update.
 
 Runs the helper service's Update (daemon) or UpdateGui as root — polkit auth_admin, so a native
-prompt asks for confirmation first — in a PrivJob worker thread: git pull --ff-only in /opt/veloscroll,
-service-file refresh + daemon-reload only when the release changed veloscroll.service, then a restart
-and a journal tail — or just git pull --ff-only in /opt/veloscroll-gui for the GUI (no service; after
-a successful pull that changes code, the running instance spawns a fresh one and quits itself). The
-transcript pane shows every step; after a run that pulled new code the previous commit hash is offered
-as a one-line rollback command. A clean repo ends in an "already up to date" no-op — nothing is restarted."""
+prompt asks for confirmation first — in a PrivJob worker thread: for the daemon, git pull --ff-only in
+/opt/veloscroll on the branch the GUI's C++-daemon checkbox selected (migrating the checkout when it
+sits on the other branch), the branch's deploy (the five Python files, or a CMake build + install of the
+five C++ binaries), service-file refresh + daemon-reload only when the release changed veloscroll.service,
+then a restart and a journal tail — or just git pull --ff-only in /opt/veloscroll-gui for the GUI (no
+service; after a successful pull that changes code, the running instance spawns a fresh one and quits
+itself). The transcript pane shows every step; after a run that pulled new code the previous commit hash
+is offered as a one-line rollback command. A clean repo ends in an "already up to date" no-op — nothing
+is restarted."""
 
 import html
 import json
@@ -24,6 +27,8 @@ from . import DAEMON_DIR, GUI_DIR
 from .proc import PrivError, PrivJob
 
 UPDATE_TIMEOUT_S = 180                          # advisory only: the helper enforces its own per-command caps (git 60 s)
+UPDATE_TIMEOUT_CPP_S = 600                      # advisory: the cpp branch adds a CMake build on top of the pull
+DAEMON_BRANCHES = ("main", "cpp")               # must match the helper's allowlist (helpers/helper_service.py)
 
 
 def _git_head(repo_dir):
@@ -40,11 +45,24 @@ def _git_head(repo_dir):
     return (short, subject) if short else None
 
 
-def _origin_head(repo_dir):
-    """Short hash of origin's HEAD via read-only `git ls-remote origin HEAD` (no .git writes, no branch name —
-    main or master both resolve through the remote's HEAD symref); None when offline / not a git checkout."""
+def _current_branch(repo_dir):
+    """Name of the branch the checkout is on, read-only; "" when detached HEAD / unavailable."""
     try:
-        p = subprocess.run(["git", "-C", repo_dir, "ls-remote", "origin", "HEAD"],
+        p = subprocess.run(["git", "-C", repo_dir, "branch", "--show-current"],
+                           capture_output=True, text=True, timeout=5)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return ""
+    if p.returncode != 0:
+        return ""
+    return (p.stdout or "").strip()
+
+
+def _origin_head(repo_dir, ref="HEAD"):
+    """Short hash of origin's `ref` via read-only `git ls-remote` (no .git writes); None when offline /
+    not a git checkout. ref is "HEAD" (the remote's default branch — main or master both resolve through
+    the HEAD symref) or a branch ref like "refs/heads/cpp"."""
+    try:
+        p = subprocess.run(["git", "-C", repo_dir, "ls-remote", "origin", ref],
                            capture_output=True, text=True, timeout=5)
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return None
@@ -116,19 +134,32 @@ def _parse_markers(text):
 
 class UpdateDialog(QDialog):
     """One-click update for one target: "daemon" (/opt/veloscroll + service restart) or "gui"
-    (/opt/veloscroll-gui — no service; the running instance needs a reopen to pick up new code)."""
+    (/opt/veloscroll-gui — no service; the running instance needs a reopen to pick up new code).
+    For the daemon target, `branch` selects the branch the update works on (main = the Python daemon,
+    cpp = the C++ core) — taken from the GUI's C++-daemon checkbox; the checkout is migrated when it
+    sits on the other branch."""
 
-    def __init__(self, parent=None, target="daemon"):
+    def __init__(self, parent=None, target="daemon", branch="main", apply_text=None):
         super().__init__(parent)
         if target not in ("daemon", "gui"):
             raise ValueError(f"unknown update target {target!r}")
+        if branch not in DAEMON_BRANCHES:
+            raise ValueError(f"unknown daemon branch {branch!r}")
+        if target != "daemon" and apply_text is not None:
+            raise ValueError("apply_text is only for the daemon target (the branch-flip Apply)")
         self._target = target
+        self._branch = branch
+        self._apply_text = apply_text
+        self.result = None            # ("ok", transcript) / ("failed", detail) — the caller reads it after exec()
         gui = target == "gui"
         repo_dir = GUI_DIR if gui else DAEMON_DIR
         # static for the dialog's lifetime; None (non-GitHub remote / no origin) -> plain text everywhere
         self._web_base = _repo_web_base(repo_dir)
 
-        self.setWindowTitle("Update VeloScroll GUI" if gui else "Update VeloScroll daemon")
+        if apply_text is not None:
+            self.setWindowTitle("Switching the daemon branch")
+        else:
+            self.setWindowTitle("Update VeloScroll GUI" if gui else "Update VeloScroll daemon")
         self.setMinimumSize(680, 440)
         self._job = None
 
@@ -139,9 +170,10 @@ class UpdateDialog(QDialog):
         root.addWidget(self.info)
 
         row = QHBoxLayout()
-        self.btn_run = QPushButton("Update GUI…" if gui else "Update daemon…")
+        self.btn_run = QPushButton(
+            "Apply + update…" if apply_text is not None else ("Update GUI…" if gui else "Update daemon…"))
         self.btn_run.setToolTip(
-            f"Runs the helper service's {'UpdateGui' if gui else 'Update'} as root "
+            f"Runs the helper service's {'UpdateGui' if gui else ('ApplyAndUpdate' if apply_text is not None else 'Update')} as root "
             "(polkit asks for confirmation first)")
         self.btn_run.clicked.connect(self._on_update)
         self.lbl_status = QLabel("")
@@ -168,37 +200,67 @@ class UpdateDialog(QDialog):
         self.lbl_rollback.hide()
         root.addWidget(self.lbl_rollback)
 
+        if self._apply_text is not None:
+            # branch-flip Apply: the concise confirmation already happened in the tab — the combined job
+            # (config write + update behind ONE polkit prompt) starts as soon as the dialog is shown
+            QTimer.singleShot(0, self._on_update)
+
     def _set_info(self):
         """(Re)render the top info label for the current HEAD. `current commit` is the LOCAL head (what is
         running), always plain text — deliberately no link: an unpushed local commit has nothing to point at,
         so a GitHub link could mislead about what an update would actually pull. While origin is ahead an
         extra `latest on origin:` line shows that (real remote) commit with a clickable GitHub link when
-        available — omitted when up to date or the remote is unknown."""
+        available — omitted when up to date or the remote is unknown. For the daemon target the comparison
+        ref is the branch the C++-daemon checkbox selected (origin/cpp, or the remote's HEAD for main), and
+        a checkout sitting on the other branch gets a migration note."""
         gui = self._target == "gui"
         repo_dir = GUI_DIR if gui else DAEMON_DIR
         head = _git_head(repo_dir)
-        remote = _origin_head(repo_dir)
+        cpp = not gui and self._branch == "cpp"
+        ref = "refs/heads/cpp" if cpp else "HEAD"
+        remote = _origin_head(repo_dir, ref=ref)
         base = self._web_base
         cur = (f"current commit: {head[0]} — {head[1]}" if head
                else f"current commit: unknown (is {repo_dir} a git checkout?)")
+        if not gui:
+            on = _current_branch(repo_dir)
+            if on and on != self._branch:
+                cur += (f"\nbranch: {on} — the C++-daemon checkbox selects '{self._branch}'; "
+                        f"the update will migrate the checkout first")
         latest = None
         if remote and (not head or remote != head[0]):
             subject = _origin_subject(base, remote)   # GitHub only; None -> hash without message
             suffix = f" — {html.escape(subject)}" if subject else ""
-            latest = (f'latest on origin: <a href="{base}/commit/{remote}">{remote}</a>{suffix}' if base
-                      else f"latest on origin: {remote}")
+            label = "latest on origin/cpp" if cpp else "latest on origin"
+            latest = (f'{label}: <a href="{base}/commit/{remote}">{remote}</a>{suffix}' if base
+                      else f"{label}: {remote}")
         rich = bool(latest and base)                  # only the origin line ever carries a link
         if rich:
             cur = html.escape(cur).replace("\n", "<br>")   # the subject may carry HTML characters; \n collapses in rich text
         mid = ("\n" + latest) if latest else ""
-        body = ("Updates the GUI only (/opt/veloscroll-gui):\n\n" + cur + mid + "\n\n"
-                "`git pull --ff-only`. The GUI is not a service — after a successful pull that "
-                "changes code, VeloScroll GUI closes & reopens itself automatically. Your config.ini "
-                "lives outside the repo and is untouched.") if gui else (
-            "Updates the daemon only (/opt/veloscroll), per docs/UPDATING.md:\n\n" + cur + mid + "\n\n"
-            "`git pull --ff-only`, refreshes veloscroll.service + daemon-reload when the release "
-            "changed it, restarts the service and tails the journal. Your config.ini lives outside "
-            "the repo and is untouched.")
+        if gui:
+            body = ("Updates the GUI only (/opt/veloscroll-gui):\n\n" + cur + mid + "\n\n"
+                    "`git pull --ff-only`. The GUI is not a service — after a successful pull that "
+                    "changes code, VeloScroll GUI closes & reopens itself automatically. Your config.ini "
+                    "lives outside the repo and is untouched.")
+        elif cpp:
+            body = ("Updates the daemon only (/opt/veloscroll, cpp branch — the C++ core), "
+                    "per docs/UPDATING.md:\n\n" + cur + mid + "\n\n"
+                    "migrates the checkout to the cpp branch when needed, `git pull --ff-only origin cpp`, "
+                    "builds the five C++ binaries with CMake and installs them to /usr/lib/veloscroll, "
+                    "refreshes veloscroll.service + daemon-reload when the release changed it, restarts "
+                    "the service and tails the journal. Your config.ini lives outside the repo and is "
+                    "untouched.")
+        else:
+            body = ("Updates the daemon only (/opt/veloscroll, main branch — the Python daemon), "
+                    "per docs/UPDATING.md:\n\n" + cur + mid + "\n\n"
+                    "migrates the checkout to the main branch when needed, `git pull --ff-only`, "
+                    "re-deploys the changed daemon files, refreshes veloscroll.service + daemon-reload "
+                    "when the release changed it, restarts the service and tails the journal. Your "
+                    "config.ini lives outside the repo and is untouched.")
+        if self._apply_text is not None:
+            body += ("\n\nThis run also saves your config first — ONE password prompt covers the save "
+                     "and the update.")
         if rich:
             self.info.setTextFormat(Qt.RichText)      # \n collapses in rich text — convert to <br>
             self.info.setOpenExternalLinks(True)
@@ -211,23 +273,46 @@ class UpdateDialog(QDialog):
         if self._job is not None and self._job.isRunning():
             return                                       # one update at a time (the transcript would interleave)
         gui = self._target == "gui"
-        box = QMessageBox(self)
-        box.setWindowTitle("Update VeloScroll GUI" if gui else "Update VeloScroll daemon")
-        if gui:
-            box.setText("Run the GUI update as root?\n\n"
-                        "helper service: UpdateGui (polkit will ask for confirmation)\n\n"
-                        "(git pull --ff-only in /opt/veloscroll-gui; restart the GUI afterwards to apply)")
-        else:
-            box.setText("Run the daemon update as root?\n\n"
-                        "helper service: Update (polkit will ask for confirmation)\n\n"
-                        "(git pull --ff-only in /opt/veloscroll, service-file refresh when changed, restart)")
-        box.setStandardButtons(QMessageBox.Ok | QMessageBox.Cancel)
-        if box.exec() != QMessageBox.Ok:
-            return
+        if self._apply_text is None:
+            # the branch-flip Apply skips this box: the tab already showed its concise popup, and the
+            # combined job's single polkit prompt is the one confirmation
+            box = QMessageBox(self)
+            box.setWindowTitle("Update VeloScroll GUI" if gui else "Update VeloScroll daemon")
+            if gui:
+                box.setText("Run the GUI update as root?\n\n"
+                            "helper service: UpdateGui (polkit will ask for confirmation)\n\n"
+                            "(git pull --ff-only in /opt/veloscroll-gui; restart the GUI afterwards to apply)")
+            elif self._branch == "cpp":
+                box.setText("Run the daemon update as root?\n\n"
+                            "helper service: Update (polkit will ask for confirmation)\n\n"
+                            "(migrate the checkout to the cpp branch when needed, git pull --ff-only origin cpp,\n"
+                            "CMake build of the five C++ binaries + install, service-file refresh when changed, restart)")
+            else:
+                box.setText("Run the daemon update as root?\n\n"
+                            "helper service: Update (polkit will ask for confirmation)\n\n"
+                            "(migrate the checkout to the main branch when needed, git pull --ff-only,\n"
+                            "re-deploy the changed daemon files, service-file refresh when changed, restart)")
+            if not gui:
+                on = _current_branch(DAEMON_DIR)
+                if on and on != self._branch:
+                    box.setText(box.text() + f"\n\nThe checkout is currently on branch '{on}' — "
+                                             f"it will be migrated to '{self._branch}'.")
+            box.setStandardButtons(QMessageBox.Ok | QMessageBox.Cancel)
+            if box.exec() != QMessageBox.Ok:
+                return
         self.btn_run.setEnabled(False)
-        self.lbl_status.setText("running… (git pull can take a while)" if gui
-                                else "running… (git pull + restart can take a while)")
-        job = PrivJob(["update-gui"] if gui else ["update"], self, timeout=UPDATE_TIMEOUT_S)
+        if gui:
+            self.lbl_status.setText("running… (git pull can take a while)")
+        elif self._branch == "cpp":
+            self.lbl_status.setText("running… (git pull + CMake build can take a few minutes)")
+        else:
+            self.lbl_status.setText("running… (git pull + restart can take a while)")
+        timeout = UPDATE_TIMEOUT_CPP_S if (not gui and self._branch == "cpp") else UPDATE_TIMEOUT_S
+        if self._apply_text is not None:
+            # branch-flip Apply: the config write and the full update travel as ONE polkit-gated call
+            job = PrivJob(["apply-and-update", self._branch], self, input_text=self._apply_text, timeout=timeout)
+        else:
+            job = PrivJob(["update-gui"] if gui else ["update", self._branch], self, timeout=timeout)
         job.finished_ok.connect(lambda out: self._finish(job, out))
         job.failed.connect(self._fail)
         self._job = job
@@ -242,8 +327,14 @@ class UpdateDialog(QDialog):
     def _show_rollback(self, prev):
         if not prev or len(prev) < 7:                   # a full/short hash is expected; never offer an empty command
             return
-        repo_dir = GUI_DIR if self._target == "gui" else DAEMON_DIR
-        restart = "" if self._target == "gui" else " && sudo systemctl restart veloscroll"
+        gui = self._target == "gui"
+        repo_dir = GUI_DIR if gui else DAEMON_DIR
+        cpp = not gui and self._branch == "cpp"
+        # cpp: a checkout alone does not rebuild the installed binary — the note says what else a rollback needs
+        restart = "" if gui else (" && sudo systemctl restart veloscroll" if not cpp else "")
+        note = ("   (C++ branch: a checkout does not rebuild the installed binary — re-run the build + install "
+                "block from docs/INSTALL.md, or flip the C++ checkbox back and run [Update daemon…] again, "
+                "then sudo systemctl restart veloscroll)" if cpp else "")
         base = self._web_base
         if base:
             # rich text with a clickable previous hash; the command stays selectable (TextSelectableByMouse)
@@ -252,12 +343,12 @@ class UpdateDialog(QDialog):
             self.lbl_rollback.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.LinksAccessibleByMouse)
             self.lbl_rollback.setText(
                 f"If something breaks, roll back to the previous commit:<br>"
-                f"sudo git -C {repo_dir} checkout <a href=\"{base}/commit/{prev}\">{prev}</a>{restart}")
+                f"sudo git -C {repo_dir} checkout <a href=\"{base}/commit/{prev}\">{prev}</a>{restart}{note}")
         else:                                           # non-GitHub remote — today's plain text
             self.lbl_rollback.setTextFormat(Qt.PlainText)
             self.lbl_rollback.setText(
                 f"If something breaks, roll back to the previous commit:\n"
-                f"sudo git -C {repo_dir} checkout {prev}{restart}")
+                f"sudo git -C {repo_dir} checkout {prev}{restart}{note}")
         self.lbl_rollback.show()
 
     def _show_updated(self, prev, out):
@@ -285,6 +376,7 @@ class UpdateDialog(QDialog):
         if job is not self._job:
             return                                       # a newer operation superseded this one
         self._job = None
+        self.result = ("ok", out)
         self.btn_run.setEnabled(True)
         self.txt_log.setPlainText(out or "")
         prev, result = _parse_markers(out)
@@ -322,6 +414,7 @@ class UpdateDialog(QDialog):
         if job is not self._job:
             return                                       # a newer operation superseded this one
         self._job = None
+        self.result = ("failed", detail)
         self.btn_run.setEnabled(True)
         text = (detail or "").strip()
         hint = "\n\n— install and start the helper service first (see the Permissions panel)" \

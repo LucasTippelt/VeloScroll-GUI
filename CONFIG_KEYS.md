@@ -1,7 +1,7 @@
 # Config keys (hot-reloaded)
 
 All 30 daemon keys, grouped as in the GUI. Plus the GUI-only
-keys: `STARTUP_TAB`, `TRAY_LED` — see
+keys: `STARTUP_TAB`, `TRAY_LED`, `DAEMON_CPP` — see
   [Tray icon](#tray-icon). A non-empty value in
 `/etc/veloscroll/config.ini`
 overrides the built-in default; a missing or empty key falls back to it. Edits hot-reload within ~2 s — no

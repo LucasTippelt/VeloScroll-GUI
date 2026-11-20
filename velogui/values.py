@@ -31,12 +31,14 @@ SECTIONS = (
 # GUI-owned keys: the GUI persists them in [veloscroll] of config.ini, but they are not daemon keys —
 # the daemon logs an unknown-key warning and ignores them (the helper's ApplyConfig does too). Their
 # effective value is whatever config.ini says; no state-file/computed dataset ever carries them.
-GUI_KEYS = ("STARTUP_TAB", "TRAY_LED")
+# DAEMON_CPP selects the daemon branch the [Update daemon…] procedure works on (cpp = the C++ core).
+GUI_KEYS = ("STARTUP_TAB", "TRAY_LED", "DAEMON_CPP")
 
 ALL_KEYS = tuple(k for _, keys in SECTIONS for k in keys) + GUI_KEYS
 
 # built-in defaults of the GUI-owned boolean keys (applied when the key is absent from config.ini).
-GUI_BOOL_DEFAULTS = {"TRAY_LED": True}
+# DAEMON_CPP absent = False = the main branch (the Python daemon) — existing installs are unaffected.
+GUI_BOOL_DEFAULTS = {"TRAY_LED": True, "DAEMON_CPP": False}
 
 
 def gui_bool(raw, default):

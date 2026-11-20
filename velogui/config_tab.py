@@ -2,7 +2,7 @@
 
 Columns per key row: Key | Effective value (live, read-only) | Edit (typed widget) |
 Description (static hint, effective-fallback note when unset, or the validation error).
-The Daemon group (service state / grabbed devices / reload health) and the Permissions
+The Daemon group (service state / daemon core / grabbed devices) and the Permissions
 panel sit on the same page above and below the table.
 
 This tab owns the edit buffer for ALL keys (the 30 daemon keys plus the GUI-owned STARTUP_TAB)
@@ -25,7 +25,9 @@ row in this page's table; the daemon ignores the key itself.
   blocks Apply; the helper service re-validates with the same parser as defense-in-depth.
 - Apply runs in a worker thread via the helper's ApplyConfig; after success the reload is
   confirmed from the state file (~2 s when STATE_FILE is on) or, without one, from the
-  journal (helper logs) — banner flips to success/failure accordingly.
+  journal (helper logs) — banner flips to success/failure accordingly. An apply that flips
+  the C++-daemon checkbox instead opens the daemon update on the new branch right after the
+  write (migrate + pull + build/deploy + restart), so the running core follows the checkbox.
 - Cancel restores the editor from memory and, when a change was already applied, writes
   the previous text back through the same privileged path so the daemon reloads it.
 """
@@ -35,15 +37,15 @@ import os
 from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QGroupBox,
-                                QHBoxLayout, QLabel, QLineEdit, QPushButton, QSpinBox, QTableWidget,
-                                QTableWidgetItem, QVBoxLayout, QWidget)
+                                QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton, QSpinBox,
+                                QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
-from . import BUS_NAME, CONFIG_PATH, TABS
+from . import BUS_NAME, CONFIG_PATH, DEPLOY_DIR, TABS, UNIT_PATH
 from . import values as vmod
 from .apply_bar import ApplyBar
 from .capture import CaptureDialog
-from .config_model import (FALLBACK, GUI_KEYS, KEY_KINDS, NULLABLE, RAMP_KEYS, TAB_HOSTS, _render,
-                           ConfigModel)
+from .config_model import (FALLBACK, GUI_KEYS, KEY_KINDS, NULLABLE, RAMP_KEYS, TAB_HOSTS, _parse_raws,
+                           _render, ConfigModel)
 from .errors import popup_error
 from .permissions_panel import PermissionsPanel, SERVICE_FIX
 from .proc import PrivError, PrivJob, run_priv
@@ -51,6 +53,38 @@ from .update_check import UpdateCheckJob
 from .update_dialog import UpdateDialog
 
 _SERVICE_COLORS = {"active": "#16a34a", "failed": "#dc2626"}
+
+
+def _deployed_branch_text():
+    """Which daemon core the installed service actually runs — the unit's ExecStart when readable (the main
+    unit runs `python3 …/veloscroll.py`, the cpp unit the `…/veloscroll` binary directly), else the deployed
+    files (the C++ binary wins over the legacy veloscroll.py the cpp deploy keeps for the preset).
+    '' when nothing is deployed."""
+    try:
+        with open(UNIT_PATH, "r", encoding="utf-8") as f:
+            for line in f:
+                if line.strip().startswith("ExecStart="):
+                    tokens = line.split("=", 1)[1].strip().split()
+                    if any(t.endswith("veloscroll.py") for t in tokens):
+                        return "daemon core: Python (main branch)"
+                    if any(t.endswith("/veloscroll") for t in tokens):
+                        return "daemon core: C++ (cpp branch)"
+                    return f"daemon core: unknown ({tokens[0] if tokens else '?'})"
+    except (OSError, IndexError):
+        pass
+    if os.path.isfile(os.path.join(DEPLOY_DIR, "veloscroll")):
+        return "daemon core: C++ (cpp branch)"
+    if os.path.isfile(os.path.join(DEPLOY_DIR, "veloscroll.py")):
+        return "daemon core: Python (main branch)"
+    return "daemon core: — (nothing deployed)"
+
+
+def _branch_of(text):
+    """'cpp'/'main' selected by a config text's DAEMON_CPP (absent, unrecognized or malformed -> main)."""
+    raws = _parse_raws(text) if text else {}
+    if raws is None:
+        return "main"
+    return "cpp" if vmod.gui_bool(raws.get("DAEMON_CPP"), False) else "main"
 _UPDATE_BTN_AMBER = "background-color: #fef3c7; color: #1f2937;"   # update-button tint while an update is available — same pair as backups_tab's CHANGED_BG/CHANGED_FG, legible under light AND dark themes
 AMBER_STYLE = "background-color: #fef3c7; color: #1f2937;"         # unsaved-value tint for a field editor (and its tab label) — the same amber pair
 
@@ -88,6 +122,7 @@ TITLES = {
     "DISTANCE_FILE": ("DISTANCE_FILE", "write /run/veloscroll/distance live feed for the curve markers (GUI switch)"),
     "STARTUP_TAB": ("STARTUP_TAB", "tab opened on startup — GUI only, the daemon ignores this key"),
     "TRAY_LED": ("TRAY_LED", "status-LED tray icon: red while scroll bypass is latched, green while a scroll session is active, gray when idle — GUI only (applies live; the daemon ignores this key)"),
+    "DAEMON_CPP": ("DAEMON_CPP", "daemon branch for [Update daemon…]: True = C++ core (cpp), False/absent = Python (main) — GUI only (applies live; the daemon ignores this key)"),
 }
 
 SECTIONS = (   # display order per plan, minus SCROLL_INVERT_KEYS (Scroll/Invert tab), RAMP_KEYS (Ramp tab),
@@ -98,9 +133,10 @@ SECTIONS = (   # display order per plan, minus SCROLL_INVERT_KEYS (Scroll/Invert
     ("Misc", ("MAX_BACKUPS", "TICK")),
 )
 
-# this page's rows plus the two row-less lifecycle keys must be exactly what TAB_HOSTS assigns to it —
-# a key added to one side and not the other would tint (or fail to tint) the wrong tab
-assert {k for _, ks in SECTIONS for k in ks} | {"STATE_FILE", "DISTANCE_FILE"} == set(TAB_HOSTS["Status & Config"])
+# this page's rows plus the row-less keys (the lifecycle switches + the Daemon group's C++-daemon
+# checkbox) must be exactly what TAB_HOSTS assigns to it — a key added to one side and not the other
+# would tint (or fail to tint) the wrong tab
+assert {k for _, ks in SECTIONS for k in ks} | {"STATE_FILE", "DISTANCE_FILE", "DAEMON_CPP"} == set(TAB_HOSTS["Status & Config"])
 
 # float spin-box geometry per key: (decimals, min, max, step)
 FLOAT_GEOM = {
@@ -306,28 +342,45 @@ class ConfigTab(QWidget):
         # -- daemon group (merged from the old Status tab) --------------------------
         dg = QGroupBox("Daemon")
         grid = QHBoxLayout(dg)
+        # left cell, stacked: service state, the C++-daemon checkbox, then the installed daemon core
+        svc_wrap = QWidget()
+        svc_col = QVBoxLayout(svc_wrap)
+        svc_col.setContentsMargins(0, 0, 0, 0)
+        svc_row = QHBoxLayout()
+        svc_row.setContentsMargins(0, 0, 0, 0)
         self.lbl_service_dot = QLabel("●")
         self.lbl_service = QLabel("checking…")
+        svc_row.addWidget(self.lbl_service_dot)
+        svc_row.addWidget(self.lbl_service)
+        svc_row.addStretch(1)      # absorb the slack — without it the two stretchable labels spread apart
+        svc_col.addLayout(svc_row)
+        # C++-daemon checkbox (GUI-owned key DAEMON_CPP): selects the branch [Update daemon…] works on —
+        # cpp = the C++ core (CMake build + install), main = the Python daemon (file deploy). Like TRAY_LED
+        # it applies live (no daemon round-trip); an Apply after a flip also runs the daemon update on the
+        # new branch (migrate + pull + build/deploy + restart), so the running core follows the checkbox.
+        self.chk_daemon_cpp = QCheckBox("C++ daemon (cpp branch)")
+        self.chk_daemon_cpp.setToolTip(
+            "Builds/deploys the selected branch of the daemon core on apply")
+        self.chk_daemon_cpp.toggled.connect(self._on_daemon_cpp_toggled)
+        svc_col.addWidget(self.chk_daemon_cpp)
+        self.lbl_branch = QLabel("")
+        self.lbl_branch.setStyleSheet("font-size: small;")
+        self.lbl_branch.setToolTip(
+            "The daemon core the installed service runs (read from the unit's ExecStart, falling back to the "
+            "deployed files). Flip the C++-daemon checkbox above and press Apply to switch it — the update "
+            "migrates, pulls, builds/deploys and restarts the service on the selected branch.")
+        svc_col.addWidget(self.lbl_branch)
         self.lbl_devices = QLabel("")
-        self.lbl_reload = QLabel("")
-        for l in (self.lbl_devices, self.lbl_reload):
-            l.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        grid.addWidget(self.lbl_service_dot, 0, Qt.AlignVCenter)
-        grid.addWidget(self.lbl_service)
+        self.lbl_devices.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        grid.addWidget(svc_wrap)
         grid.addStretch(1)
         dev_col = QVBoxLayout()
         # no forced color (theme-safe): only the size is set — palette default text color applies
         dev_title = QLabel("grabbed devices")
         dev_title.setStyleSheet("font-size: small;")
-        reload_col = QVBoxLayout()
-        reload_title = QLabel("config reload health")
-        reload_title.setStyleSheet("font-size: small;")
         dev_col.addWidget(dev_title)
         dev_col.addWidget(self.lbl_devices)
-        reload_col.addWidget(reload_title)
-        reload_col.addWidget(self.lbl_reload)
         grid.addLayout(dev_col, 1)
-        grid.addLayout(reload_col, 1)
         # the two one-click updates stacked (daemon first, GUI directly below it) plus the on-demand
         # re-check of both repos against their origins, vertically centered in their cell — a wrapper
         # widget because QBoxLayout.addLayout() takes no alignment argument
@@ -337,7 +390,8 @@ class ConfigTab(QWidget):
         update_col.addStretch(1)
         self.btn_update = QPushButton("Update daemon…")     # one-click update per docs/UPDATING.md; instance attrs — _on_update_check tints them amber while an update is available
         self.btn_update.setToolTip(
-            "Pull the latest daemon code from git and restart the service (docs/UPDATING.md). "
+            "Pull the latest daemon code from git and restart the service (docs/UPDATING.md) — on the branch "
+            "the C++-daemon checkbox selects (migrating the checkout when it sits on the other branch). "
             "The dialog shows a transcript of every step plus a rollback command for the previous commit.")
         self.btn_update.clicked.connect(self._open_update_dialog)
         update_col.addWidget(self.btn_update)
@@ -490,6 +544,9 @@ class ConfigTab(QWidget):
         color = _SERVICE_COLORS.get(s, "#9ca3af")
         self.lbl_service_dot.setStyleSheet(f"color: {color}; font-size: 16px;")
         self.lbl_service.setText(f"service: {s}")
+        branch = _deployed_branch_text()
+        if self.lbl_branch.text() != branch:      # no churn on the 2 s refresh
+            self.lbl_branch.setText(branch)
 
         if isinstance(state, dict):
             devs = state.get("devices_grabbed") or []
@@ -499,23 +556,6 @@ class ConfigTab(QWidget):
         else:
             text = "no state data"
         self.lbl_devices.setText(text)
-
-        if isinstance(state, dict):
-            parts = []
-            if state.get("reload_ok", True):
-                parts.append("reload OK")
-            else:
-                parts.append(f"reload rejected: {state.get('reload_error') or 'unknown error'}")
-            try:
-                cfg_now = os.stat(CONFIG_PATH).st_mtime_ns
-                if w.state_mtime_ns is not None and s == "active" and cfg_now > w.state_mtime_ns:
-                    parts.append("pending reload (~2 s)")
-            except OSError:
-                pass
-            self.lbl_reload.setText(" · ".join(parts))
-        else:
-            self.lbl_reload.setText(
-                "no state data (set STATE_FILE = True to enable)" if s == "active" else "service not active")
 
         rows, dataset, errors = vmod.build_rows(state)
         by_key = {r["key"]: r for r in rows if "key" in r}
@@ -586,6 +626,22 @@ class ConfigTab(QWidget):
         origin = self.model.origin()
         for key, row in self.rows.items():
             row.set_display(self.model.values.get(key), raw=origin.get(key, ""))
+        self._sync_daemon_cpp_checkbox()
+        self._refresh_validation()
+
+    def _sync_daemon_cpp_checkbox(self):
+        """Re-sync the Daemon group's C++-daemon checkbox from the edit buffer (initial load / after
+        Apply / Cancel / disk reload) — blocking its own signal so the sync is not counted as an edit."""
+        self.chk_daemon_cpp.blockSignals(True)
+        self.chk_daemon_cpp.setChecked(bool(self.model.values.get("DAEMON_CPP")))
+        self.chk_daemon_cpp.blockSignals(False)
+
+    def _on_daemon_cpp_toggled(self, checked):
+        """C++-daemon checkbox (GUI-owned DAEMON_CPP): writes to the shared edit buffer exactly like a
+        row editor — applies live (no daemon round-trip), tints dirty until Apply, reverts on Cancel.
+        The daemon ignores the key; only the update/check procedures read it, and an Apply after a flip
+        also runs the daemon update on the new branch (see _on_apply_done)."""
+        self.model.set_raw("DAEMON_CPP", "True" if checked else "False")
         self._refresh_validation()
 
     def _tick_disk(self):
@@ -654,8 +710,10 @@ class ConfigTab(QWidget):
     # -- one-click updates (daemon + GUI) -------------------------------------------
 
     def _open_update_dialog(self):
-        """[Update daemon…] on the Daemon group: modal dialog with confirm + transcript (update_dialog.py)."""
-        UpdateDialog(self.window(), target="daemon").exec()
+        """[Update daemon…] on the Daemon group: modal dialog with confirm + transcript (update_dialog.py).
+        The branch comes from the C++-daemon checkbox's current edit-buffer value (live, pre-Apply)."""
+        branch = "cpp" if self.model.values.get("DAEMON_CPP") else "main"
+        UpdateDialog(self.window(), target="daemon", branch=branch).exec()
         self.check_updates()          # a pulled update clears/refreshes the indicator
 
     def _open_gui_update_dialog(self):
@@ -676,11 +734,13 @@ class ConfigTab(QWidget):
 
     def check_updates(self):
         """Compare local HEAD against origin's for both repos (read-only, off-thread); the result
-        drives lbl_update_avail. Started once from MainWindow.start(), re-run after any UpdateDialog
-        finishes and on demand via [Check for updates…] — no periodic re-check."""
+        drives lbl_update_avail. The daemon repo is compared against the branch the C++-daemon checkbox
+        selects (origin/cpp or the remote's HEAD for main). Started once from MainWindow.start(),
+        re-run after any UpdateDialog finishes and on demand via [Check for updates…] — no periodic re-check."""
         if getattr(self, "_update_job", None) is not None and self._update_job.isRunning():
             return                                  # one check at a time (a stale result would race it)
-        job = UpdateCheckJob(self)
+        branch = "cpp" if self.model.values.get("DAEMON_CPP") else "main"
+        job = UpdateCheckJob(self, daemon_branch=branch)
         job.results.connect(self._on_update_check)
         self._update_job = job
         job.start()
@@ -774,6 +834,11 @@ class ConfigTab(QWidget):
         if text == self.disk_text:
             self._banner("no changes to apply", "success")
             return
+        if _branch_of(text) != _branch_of(self.disk_text):
+            # a branch flip is a migration, not a plain write: one concise popup, then the config write
+            # and the update travel as ONE polkit-gated call (one password prompt for everything)
+            self._start_branch_switch(text, values)
+            return
         # the config text travels as the D-Bus argument itself — the helper never opens a caller-chosen path
         self._set_busy(True, "Applying…")
         self._pending = (text, values)
@@ -781,6 +846,58 @@ class ConfigTab(QWidget):
         job.finished_ok.connect(self._on_apply_done)      # Signal(str): helper output
         job.failed.connect(self._on_priv_fail)            # Signal(str, str): (kind, detail)
         job.start()
+
+    def _start_branch_switch(self, text, values):
+        """An Apply that flips the C++-daemon checkbox: ONE concise popup, then the combined helper call
+        (ApplyAndUpdate) — the config write and the branch migration/pull/build+deploy/restart behind a
+        single polkit prompt. The transcript shows in the update dialog (auto-started, no second
+        confirmation); when it closes, the disk is re-synced from the file, because the write may or may
+        not have landed (polkit cancel / rejected config -> nothing written, edits kept)."""
+        branch = _branch_of(text)
+        box = QMessageBox(self.window())
+        box.setIcon(QMessageBox.Information)
+        box.setWindowTitle("Switching the daemon branch")
+        box.setText(
+            f"This apply switches the daemon to the {branch} branch and saves your config with it.\n\n"
+            "One step: migrate the checkout, pull, "
+            + ("build + install the C++ binaries, " if branch == "cpp" else "re-deploy the daemon files, ")
+            + "then restart the service.\n\n"
+            "A single password prompt confirms all of it.")
+        box.setStandardButtons(QMessageBox.Ok | QMessageBox.Cancel)
+        if box.exec() != QMessageBox.Ok:
+            self._banner("branch switch cancelled — nothing was written", "info")
+            return
+        self.pre_apply_text = self.disk_text      # Cancel can revert to this afterwards
+        self._set_busy(True, "Switching daemon branch…")
+        dlg = UpdateDialog(self.window(), target="daemon", branch=branch, apply_text=text)
+        dlg.exec()
+        self._set_busy(False)
+        self.check_updates()          # a pulled update clears/refreshes the indicator
+        self._resync_after_branch_switch()
+        if dlg.result is not None and dlg.result[0] == "ok":
+            self._banner("branch switched — config applied and the daemon was updated", "success")
+        elif dlg.result is not None and dlg.result[0] == "failed":
+            self._banner("branch switch failed — see the dialog transcript (the config may already be saved)",
+                         "error", sticky=True)
+
+    def _resync_after_branch_switch(self):
+        """After the combined apply+update dialog closes: the disk is the truth. Reload from the file
+        only when it actually changed (the write landed — update ok, or it failed after the write);
+        otherwise keep the edit buffer as-is so the user can retry or Cancel."""
+        try:
+            st = os.stat(CONFIG_PATH)
+        except OSError:
+            return
+        sig = (st.st_mtime_ns, st.st_size)
+        if sig == self._disk_sig:
+            return                       # nothing was written — keep the pending edits
+        text = self._read_config_file()
+        if text is None:
+            return
+        self.disk_text = text
+        self._disk_sig = sig
+        self.model.load_text(text)
+        self.reset_rows()
 
     def _take_pending(self):
         """Pop the in-flight job's data; None when nothing is pending (each job signals exactly once)."""
@@ -796,6 +913,8 @@ class ConfigTab(QWidget):
         if pending is None:
             return
         text, values = pending
+        # (a branch flip never reaches here — apply() routes it through _start_branch_switch, whose
+        # combined call does the write and the update in one polkit-gated operation)
         self.pre_apply_text = self.disk_text      # Cancel can revert to this after the apply
         self.disk_text = text
         try:

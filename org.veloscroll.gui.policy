@@ -10,9 +10,10 @@
     read / config / service — `yes`: silent for any local user with a session. These expose no input
       data and every write is re-validated by the daemon's own parser, so unattended invocation is
       nuisance-level at worst. A per-machine override .policy can tighten any of them without code changes.
-    capture / update / tick — `auth_admin`: the native polkit prompt on every call (no _keep). tick gates a
-      config write that would actually change TICK: the helper resolves it per call, read-only and before
-      authorization, so an unchanged-TICK apply or preset load stays silent.
+    capture / update / tick / daemon-branch — `auth_admin`: the native polkit prompt on every call (no _keep).
+      tick gates a config write that would actually change TICK, and daemon-branch one that would change the
+      DAEMON_CPP branch selection: the helper resolves both per call, read-only and before authorization, so
+      an unchanged apply or preset load stays silent.
 
   allow_inactive=no everywhere: a caller with no session (cron, logged-out background process) gets
   nothing; an interactive user (graphical or SSH) is "active" and can use the yes tier without any
@@ -78,6 +79,16 @@
   <action id="org.veloscroll.gui.tick">
     <description>Change the VeloScroll tick rate</description>
     <message>Authentication is required to change the TICK value in /etc/veloscroll/config.ini (via an apply or a preset loadall/restore that changes it).</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+  </action>
+
+  <action id="org.veloscroll.gui.daemon-branch">
+    <description>Switch the VeloScroll daemon branch</description>
+    <message>Authentication is required to change the DAEMON_CPP branch selection in /etc/veloscroll/config.ini (via an apply or a preset restore that changes it). An apply that flips the branch uses this one prompt for everything: it saves the config and migrates, pulls, builds/deploys and restarts the daemon on the selected branch.</message>
     <defaults>
       <allow_any>auth_admin</allow_any>
       <allow_inactive>no</allow_inactive>

@@ -2,9 +2,10 @@
 import os
 
 APP_NAME = "VeloScroll"
-VERSION = "2.2.0"   #new scheme since v2.0.0 (see VERSIONING.md): X parity break, Y feature/behavior change in either component, Z bugfix/docs
+VERSION = "2.3.0"   #new scheme since v2.0.0 (see VERSIONING.md): X parity break, Y feature/behavior change in either component, Z bugfix/docs
 
 DAEMON_DIR = "/opt/veloscroll"
+DEPLOY_DIR = "/usr/lib/veloscroll"   # deployed daemon copy (root-owned 755) — the service runs from here
 CONFIG_PATH = "/etc/veloscroll/config.ini"
 STATE_PATH = "/run/veloscroll/state"
 DISTANCE_PATH = "/run/veloscroll/distance"   # high-rate live per-axis distance feed (daemon key DISTANCE_FILE)

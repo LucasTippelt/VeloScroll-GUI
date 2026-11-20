@@ -57,6 +57,17 @@ class RampTab(QWidget):
         self.tbl_v, _bands_v = config_tab.make_section_table((RAMP_SECTIONS[0],), description=False)
         self.tbl_h, bands_h = config_tab.make_section_table((RAMP_SECTIONS[1],), description=False)
         self._band_h = bands_h[RAMP_SECTIONS[1][0]]   # renamed live with VERTICAL_H (see _sync_band_title)
+        # the two tables host different keys/editors, so their per-column widths differ — take the max
+        # per column so both tables have identical geometry and every column fills the (equal) table
+        # width instead of leaving an empty strip right of the Edit column
+        for c in range(self.tbl_v.columnCount()):
+            w = max(self.tbl_v.columnWidth(c), self.tbl_h.columnWidth(c))
+            self.tbl_v.setColumnWidth(c, w)
+            self.tbl_h.setColumnWidth(c, w)
+        cap = sum(self.tbl_v.columnWidth(c) for c in range(self.tbl_v.columnCount())) \
+            + 2 * self.tbl_v.frameWidth() + 4
+        self.tbl_v.setMaximumWidth(cap)
+        self.tbl_h.setMaximumWidth(cap)
 
         self.curves = CurvePlots(config_tab.model, watcher=watcher)
         body.addWidget(self.tbl_v, 0, 0)
