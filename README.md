@@ -4,6 +4,12 @@ GUI frontend for the [VeloScroll](https://github.com/LucasTippelt/VeloScroll) da
 Python 3 + PySide6 (+ pyqtgraph). This file covers complete installation and setup, everything after setup — each tab, the permissions checks, and all daemon config keys — is documented in
 [USAGE.md](USAGE.md).
 
+## Who is this for?
+
+- Powerusers
+- Doomscrollers
+- Programmers
+- Editors (Audio/Video) who work with large horizontal timelines
 
 ## Prerequisites
 
